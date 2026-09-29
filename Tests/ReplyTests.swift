@@ -51,6 +51,27 @@ import Foundation
         ])
         guard ClaudeDecoder.messages(simple).first?.text == "Please restart." else { fputs("FAIL: flattened simple Claude reply\n", stderr); exit(1) }
         print("PASS: flattened simple Claude reply")
-        print("9 reply tests passed")
+
+        var lifecycle = ReplyTranslationLifecycle()
+        let completed = lifecycle.begin()
+        precondition(lifecycle.isTranslating)
+        precondition(lifecycle.finish(completed))
+        precondition(!lifecycle.isTranslating)
+        print("PASS: completed reply translation clears active state")
+
+        let stale = lifecycle.begin()
+        let current = lifecycle.begin()
+        precondition(!lifecycle.finish(stale))
+        precondition(lifecycle.isCurrent(current) && lifecycle.isTranslating)
+        precondition(lifecycle.finish(current))
+        print("PASS: stale reply completion cannot clear a newer translation")
+
+        let cancelled = lifecycle.begin()
+        precondition(lifecycle.cancel(cancelled))
+        precondition(!lifecycle.isTranslating)
+        precondition(!lifecycle.finish(cancelled))
+        print("PASS: cancelled reply translation clears active state")
+
+        print("12 reply tests passed")
     }
 }

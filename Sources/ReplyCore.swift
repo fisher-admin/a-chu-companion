@@ -16,6 +16,28 @@ struct ReplyCandidate: Equatable, Sendable {
     let ordinal: Int
     let text: String
 }
+
+struct ReplyTranslationLifecycle {
+    private(set) var activeID: UUID?
+    var isTranslating: Bool { activeID != nil }
+
+    mutating func begin() -> UUID {
+        let id = UUID()
+        activeID = id
+        return id
+    }
+
+    func isCurrent(_ id: UUID) -> Bool { activeID == id }
+
+    @discardableResult mutating func finish(_ id: UUID) -> Bool {
+        guard activeID == id else { return false }
+        activeID = nil
+        return true
+    }
+
+    @discardableResult mutating func cancel(_ id: UUID) -> Bool { finish(id) }
+}
+
 enum ClaudeDecoder {
     private static func ordinal(_ label: String) -> Int? {
         let parts = label.split(separator: " ")

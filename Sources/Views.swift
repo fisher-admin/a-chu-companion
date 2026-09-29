@@ -54,7 +54,9 @@ struct MainView: View {
                                 if replies.translating { ProgressView().controlSize(.small) }
                                 else { Image(systemName: "text.bubble").foregroundStyle(.secondary) }
                                 Text(replies.status).font(.system(size: 11)).foregroundStyle(.secondary)
-                                if !replies.original.isEmpty && !replies.translating {
+                                if replies.translating {
+                                    Button("取消翻译") { replies.cancelTranslation() }.controlSize(.mini)
+                                } else if replies.canRetry {
                                     Button("重试") { replies.retry() }.controlSize(.mini)
                                 }
                             }.id("reply-status")

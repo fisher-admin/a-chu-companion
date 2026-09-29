@@ -9,7 +9,7 @@ import Translation
     @Published var watching = false
     @Published var translating = false
     @Published var reverseConfiguration: TranslationSession.Configuration?
-    private var systemJob: (ReplyCandidate, UUID)?
+    private var systemJob: (candidate: ReplyCandidate, session: UUID, attempt: UUID)?
     @Published var status = "通过A畜伴侣填入 Claude 后，自动等待并翻译新回复。"
     @Published var original = ""
     @Published var chinese = ""
@@ -20,6 +20,8 @@ import Translation
     private var tracker: ReplyTracker?
     private var polling: Task<Void, Never>?
     private var translation: Task<Void, Never>?
+    private var replyTimeout: Task<Void, Never>?
+    private var replyLifecycle = ReplyTranslationLifecycle()
     private var sessionID = UUID()
     private var version: ReplyCandidate?
     private var engine = "apple"
@@ -27,6 +29,10 @@ import Translation
     private var model = ""
     private var errors = 0
     private var armedAt = Date()
+    var canRetry: Bool {
+        guard !translating, !original.isEmpty, let latest = tracker?.latest else { return false }
+        return version == latest
+    }
 
     func arm(target: TargetBridge.Target, outbound: String, engine: String, baseURL: String, model: String) async {
         guard enabled else { return }
@@ -87,7 +93,7 @@ import Translation
                                                              now: Date().timeIntervalSinceReferenceDate)
                     self.errors = 0
                     if let current = self.version, self.tracker?.latest != current {
-                        self.translation?.cancel(); self.translating = false
+                        self.cancelReplyTranslation(resetSystemSession: true)
                     }
                     if let candidate { self.translate(candidate, token: token) }
                     else if self.tracker?.bound != true && Date().timeIntervalSince(self.armedAt) > 180 {
@@ -109,16 +115,20 @@ import Translation
         }
     }
     private func translate(_ candidate: ReplyCandidate, token: UUID) {
-        translation?.cancel()
-        version = candidate; original = candidate.text; chinese = ""; translating = true
-        status = "正在把 Claude 的回复翻译成中文…"
+        cancelReplyTranslation(resetSystemSession: false)
+        let attempt = replyLifecycle.begin()
+        version = candidate; original = candidate.text; chinese = ""; translating = replyLifecycle.isTranslating
         if engine == "apple" {
-            systemJob = (candidate, token)
+            status = "正在准备系统翻译…"
+            systemJob = (candidate: candidate, session: token, attempt: attempt)
+            armReplyTimeout(candidate, token: token, attempt: attempt, stage: "系统翻译准备", after: .seconds(120))
             if reverseConfiguration == nil {
                 reverseConfiguration = .init(source: .init(identifier: "en"), target: .init(identifier: "zh-Hans"))
             } else { reverseConfiguration?.invalidate() }
             return
         }
+        status = "正在把 Claude 的回复翻译成中文…"
+        armReplyTimeout(candidate, token: token, attempt: attempt, stage: "回复翻译", after: .seconds(120))
         let base = baseURL; let model = self.model
         translation = Task {
             do {
@@ -130,44 +140,115 @@ import Translation
                     let request = try AIProtocol.request(text: chunk, baseURL: base, model: model, key: key, direction: .toChinese)
                     translated.append(try await AITranslator.translate(request))
                 }
-                commit(translated.joined(separator: "\n\n"), candidate: candidate, token: token)
-            } catch { translationFailed(error, candidate: candidate, token: token) }
+                commit(translated.joined(separator: "\n\n"), candidate: candidate, token: token, attempt: attempt)
+            } catch { translationFailed(error, candidate: candidate, token: token, attempt: attempt) }
         }
     }
     func runSystemReply(_ session: TranslationSession) async {
-        guard let (candidate, token) = systemJob, sessionID == token else { return }
+        guard let job = systemJob, isCurrent(job) else { return }
         do {
-            guard candidate.text.count <= 60_000 else { throw BridgeError.message("回复过长，请复制需要的部分进行翻译。") }
+            guard job.candidate.text.count <= 60_000 else { throw BridgeError.message("回复过长，请复制需要的部分进行翻译。") }
+            armReplyTimeout(job.candidate, token: job.session, attempt: job.attempt, stage: "语言包准备", after: .seconds(120))
             try await session.prepareTranslation()
+            guard isCurrent(job) else { return }
+            status = "正在把 Claude 的回复翻译成中文…"
+            armReplyTimeout(job.candidate, token: job.session, attempt: job.attempt, stage: "回复翻译", after: .seconds(120))
             var translated: [String] = []
-            for chunk in ClaudeDecoder.chunks(candidate.text) {
+            for chunk in ClaudeDecoder.chunks(job.candidate.text) {
                 try Task.checkCancellation()
+                guard isCurrent(job) else { return }
                 translated.append(try await session.translate(chunk).targetText)
+                guard isCurrent(job) else { return }
             }
-            commit(translated.joined(separator: "\n\n"), candidate: candidate, token: token)
-        } catch { translationFailed(error, candidate: candidate, token: token) }
+            commit(translated.joined(separator: "\n\n"), candidate: job.candidate, token: job.session, attempt: job.attempt)
+        } catch { translationFailed(error, candidate: job.candidate, token: job.session, attempt: job.attempt) }
     }
-    private func commit(_ result: String, candidate: ReplyCandidate, token: UUID) {
-        guard sessionID == token, version == candidate, tracker?.latest == candidate, !Task.isCancelled else { return }
-        chinese = result; translating = false
+    private func isCurrent(_ job: (candidate: ReplyCandidate, session: UUID, attempt: UUID)) -> Bool {
+        sessionID == job.session && version == job.candidate && replyLifecycle.isCurrent(job.attempt)
+    }
+    private func armReplyTimeout(_ candidate: ReplyCandidate, token: UUID, attempt: UUID, stage: String, after duration: Duration) {
+        replyTimeout?.cancel()
+        replyTimeout = Task { [weak self] in
+            do { try await Task.sleep(for: duration) } catch { return }
+            self?.replyTranslationTimedOut(candidate, token: token, attempt: attempt, stage: stage)
+        }
+    }
+    private func replyTranslationTimedOut(_ candidate: ReplyCandidate, token: UUID, attempt: UUID, stage: String) {
+        guard sessionID == token, version == candidate, replyLifecycle.finish(attempt) else { return }
+        replyTimeout = nil
+        translation?.cancel(); translation = nil
+        let timedOutSystemJob = systemJob?.attempt == attempt
+        systemJob = nil
+        if timedOutSystemJob { reverseConfiguration = nil }
+        translating = replyLifecycle.isTranslating
+        if tracker?.latest != candidate {
+            status = "Claude 正在回复，等待文字稳定…"
+        } else {
+            status = "回复翻译超时（\(stage)），可点击重试。"
+        }
+    }
+    private func commit(_ result: String, candidate: ReplyCandidate, token: UUID, attempt: UUID) {
+        guard sessionID == token, version == candidate, replyLifecycle.finish(attempt) else { return }
+        replyTimeout?.cancel(); replyTimeout = nil
+        if systemJob?.attempt == attempt { systemJob = nil }
+        translation = nil
+        translating = replyLifecycle.isTranslating
+        guard tracker?.latest == candidate else {
+            status = "Claude 正在回复，等待文字稳定…"
+            return
+        }
+        guard !Task.isCancelled else {
+            status = "回复翻译已取消，可点击重试。"
+            return
+        }
+        chinese = result
         onReply(token.uuidString + ":" + String(candidate.ordinal), candidate.text, result)
         status = "中文译文已更新。若 Claude 继续补充，译文会随之更新。"
     }
-    private func translationFailed(_ error: Error, candidate: ReplyCandidate, token: UUID) {
-        guard sessionID == token, version == candidate, tracker?.latest == candidate, !Task.isCancelled else { return }
-        translating = false; status = "回复翻译失败：" + error.localizedDescription + "；可点击重试翻译。"
+    private func translationFailed(_ error: Error, candidate: ReplyCandidate, token: UUID, attempt: UUID) {
+        guard sessionID == token, version == candidate, replyLifecycle.finish(attempt) else { return }
+        replyTimeout?.cancel(); replyTimeout = nil
+        if systemJob?.attempt == attempt { systemJob = nil }
+        translation = nil
+        translating = replyLifecycle.isTranslating
+        guard tracker?.latest == candidate else {
+            status = "Claude 正在回复，等待文字稳定…"
+            return
+        }
+        if Task.isCancelled || error is CancellationError {
+            status = "回复翻译已取消，可点击重试。"
+        } else {
+            status = "回复翻译失败：" + error.localizedDescription + "；可点击重试。"
+        }
     }
-    func retry() { if let candidate = tracker?.latest { translate(candidate, token: sessionID) } }
+    private func cancelReplyTranslation(resetSystemSession: Bool) {
+        let hadSystemJob = systemJob != nil
+        replyTimeout?.cancel(); replyTimeout = nil
+        translation?.cancel(); translation = nil
+        if let attempt = replyLifecycle.activeID { _ = replyLifecycle.cancel(attempt) }
+        systemJob = nil
+        translating = replyLifecycle.isTranslating
+        if resetSystemSession && hadSystemJob { reverseConfiguration = nil }
+    }
+    func cancelTranslation() {
+        guard translating else { return }
+        cancelReplyTranslation(resetSystemSession: true)
+        status = "回复翻译已取消，可点击重试。"
+    }
+    func retry() {
+        guard canRetry, let candidate = tracker?.latest else { return }
+        translate(candidate, token: sessionID)
+    }
     private func pause(_ message: String) {
-        watching = false; translating = false; translation?.cancel(); polling?.cancel(); polling = nil
-        systemJob = nil; reverseConfiguration = nil
+        watching = false; cancelReplyTranslation(resetSystemSession: true); polling?.cancel(); polling = nil
+        reverseConfiguration = nil
         status = message
     }
     func stop(clear: Bool = false) {
-        sessionID = UUID(); watching = false; translating = false
-        polling?.cancel(); polling = nil; translation?.cancel(); translation = nil
+        sessionID = UUID(); watching = false
+        polling?.cancel(); polling = nil; cancelReplyTranslation(resetSystemSession: true)
         source = nil; tracker = nil; version = nil
-        systemJob = nil; reverseConfiguration = nil
+        reverseConfiguration = nil
         status = "自动读取已停止。"
         if clear { original = ""; chinese = "" }
     }
