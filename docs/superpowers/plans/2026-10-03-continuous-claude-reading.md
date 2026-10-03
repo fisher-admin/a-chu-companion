@@ -55,7 +55,7 @@ Files: Tests/fixture.html、build.sh、README.md、TEST_PLAN.md。
 - [x] 完整 ./test.sh、./build-fixture.sh、./install.sh。正式 build28 用现有身份签名安装，CUA 打开。
 - [x] 用户实体连接后，本机直接两轮＋伴侣一轮均自动读取，停止＋恢复通过，长回复头尾／滚动条通过。历史列表选择单独检查；自动验收不依赖历史按钮。
 - [x] 恢复真实 Claude 连接，只读现有完成回复并检查自动显示；不发送真实测试消息。记录确实完成与未验证部分。
-- [ ] git diff --check、自审、提交并推送用户已有 GitHub 仓库，核对远端与本机一致。
+- [x] git diff --check、自审、凭据检查及私有仓库核对；代码 fecb818 已提交推送，远端与本机一致。
 
 ## 追加布局
 
@@ -66,3 +66,5 @@ Files: Tests/fixture.html、build.sh、README.md、TEST_PLAN.md。
 
 - [x] 顶部三项操作并排，进度条随额度区宽度伸展；底部操作合并一行。
 - [x] build28 默认 610 点窄窗口、已有译文时的单行操作及顶部设置入口原生复核。
+
+- [x] 访达处于前台时，监测持续并完成译文状态更新；关闭主窗口及退出行为已核对。
