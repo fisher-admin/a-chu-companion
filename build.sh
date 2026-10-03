@@ -8,6 +8,9 @@ trap 'rm -rf "$staging"' EXIT
 app="$staging/A畜伴侣.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 swiftc -swift-version 5 -O -target arm64-apple-macos15.0 -module-cache-path "$PWD/.build/cache" Sources/*.swift -o "$app/Contents/MacOS/AChuCompanion"
+swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/CompanionIcon.swift Tools/GenerateIcons.swift -o .build/generate-icons
+.build/generate-icons "$staging/AChuCompanion.iconset"
+iconutil -c icns -o "$app/Contents/Resources/AChuCompanion.icns" "$staging/AChuCompanion.iconset"
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -17,13 +20,14 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleDisplayName</key><string>A畜伴侣</string>
 <key>CFBundleExecutable</key><string>AChuCompanion</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.0.4</string>
-<key>CFBundleVersion</key><string>5</string>
+<key>CFBundleShortVersionString</key><string>1.1.1</string>
+<key>CFBundleVersion</key><string>10</string>
+<key>CFBundleIconFile</key><string>AChuCompanion</string>
 <key>LSMinimumSystemVersion</key><string>15.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSPrincipalClass</key><string>NSApplication</string>
-<key>NSAccessibilityUsageDescription</key><string>将翻译后的英文填入你选定的软件输入框，并按你的设置触发发送。</string>
+<key>NSAccessibilityUsageDescription</key><string>将译文填入你选定的软件输入框，并按你的设置触发发送和读取 Claude 回复。</string>
 </dict></plist>
 PLIST
 ./sign-app.sh "$app"

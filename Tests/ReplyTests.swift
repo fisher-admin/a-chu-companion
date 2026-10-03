@@ -36,7 +36,7 @@ import Foundation
         var mismatch = ReplyTracker(baseline: old, outbound: "different", conversation: "https://claude.ai/chat/test")
         do { _ = try mismatch.observe(conversation: "https://claude.ai/chat/test", messages: old + [outgoing], now: 1); fatalError("wrong prompt must stop") } catch { print("PASS: edited outbound message does not bind silently") }
         var fresh = ReplyTracker(baseline: [], outbound: "Please check it.", conversation: "https://claude.ai/new")
-        _ = try! fresh.observe(conversation: "https://claude.ai/chat/new-id", messages: [outgoing, final], now: 0)
+        _ = try! fresh.observe(conversation: "https://claude.ai/chat/new-id", messages: [.init(ordinal: 1, author: .user, text: outgoing.text), .init(ordinal: 2, author: .assistant, text: final.text)], now: 0)
         precondition(fresh.bound)
         print("PASS: new-chat route may become conversation once")
         let banner = ReplyNode(role: "AXGroup", label: "Sidebar", children: [.init(role: "AXStaticText", text: "unrelated text")])
@@ -82,6 +82,24 @@ import Foundation
         precondition(!lifecycle.finish(cancelled))
         print("PASS: cancelled reply translation clears active state")
 
-        print("13 reply tests passed")
+        let earlier = [ChatMessage(ordinal: 1, author: .user, text: "Old"), ChatMessage(ordinal: 2, author: .assistant, text: "Old reply"),
+                       ChatMessage(ordinal: 3, author: .user, text: "Recent"), ChatMessage(ordinal: 4, author: .assistant, text: "Recent reply")]
+        let prompt = ChatMessage(ordinal: 5, author: .user, text: "Large prompt")
+        let hugeReply = ChatMessage(ordinal: 6, author: .assistant, text: String(repeating: "Keep settings. 😀\n", count: 8_000))
+        var rolling = ReplyTracker(baseline: earlier, outbound: prompt.text, conversation: "https://claude.ai/chat/rolling")
+        let suffix = Array(earlier.suffix(2)) + [prompt, hugeReply]
+        precondition(try! rolling.observe(conversation: "https://claude.ai/chat/rolling", messages: suffix, now: 0) == nil)
+        precondition(try! rolling.observe(conversation: "https://claude.ai/chat/rolling", messages: suffix, now: 4)?.text == hugeReply.text)
+        print("PASS: rolling history preserves continuity and emits complete >100k reply")
+        let anotherUser = ChatMessage(ordinal: 7, author: .user, text: "Unrelated prompt")
+        do { _ = try rolling.observe(conversation: "https://claude.ai/chat/rolling", messages: suffix + [anotherUser], now: 5); fatalError("later unrelated turn must stop") }
+        catch { print("PASS: later user turn cannot silently replace the bound prompt") }
+        var noWitness = ReplyTracker(baseline: earlier, outbound: prompt.text, conversation: "https://claude.ai/chat/rolling")
+        do { _ = try noWitness.observe(conversation: "https://claude.ai/chat/rolling", messages: [prompt, hugeReply], now: 0); fatalError("no continuity witness must stop") }
+        catch { print("PASS: missing baseline witness stops instead of guessing") }
+        var gap = ReplyTracker(baseline: earlier, outbound: prompt.text, conversation: "https://claude.ai/chat/rolling")
+        do { _ = try gap.observe(conversation: "https://claude.ai/chat/rolling", messages: earlier + [hugeReply], now: 0); fatalError("ordinal gap must stop") }
+        catch { print("PASS: missing outbound ordinal cannot bind a different reply") }
+        print("17 reply tests passed")
     }
 }

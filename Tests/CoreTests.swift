@@ -12,7 +12,15 @@ import Foundation
     }
     static func main() throws {
         rejects("empty draft") { _ = try InputPolicy.validated(" \n　") }
-        rejects("oversized draft") { _ = try InputPolicy.validated(String(repeating: "中", count: 12_001)) }
+        let longDraft = String(repeating: "中😀保留\n", count: 2_000)
+        check(longDraft.count == 10_000 && (try? InputPolicy.validated(longDraft)) == longDraft, "exactly 10,000 input characters including Unicode are accepted unchanged")
+        rejects("10,001 input characters are refused without truncation") { _ = try InputPolicy.validated(longDraft + "尾") }
+        let foreignBoundary = String(repeating: "文😀", count: 25_000)
+        try ForeignTextPolicy.validate(foreignBoundary, incoming: true)
+        try ForeignTextPolicy.validate(foreignBoundary, incoming: false)
+        check(foreignBoundary.count == 50_000, "exactly 50,000 foreign characters are accepted in both directions")
+        rejects("50,001 incoming foreign characters are refused without truncation") { try ForeignTextPolicy.validate(foreignBoundary + "尾", incoming: true) }
+        rejects("50,001 outgoing foreign characters cannot be sent") { try ForeignTextPolicy.validate(foreignBoundary + "尾", incoming: false) }
         check(try! InputPolicy.validated("你好\n保留 123") == "你好\n保留 123", "multiline draft preserved")
         check(InputPolicy.shouldSubmit(returnKey: true, shift: false, composing: false), "Return submits")
         check(!InputPolicy.shouldSubmit(returnKey: true, shift: false, composing: true), "IME Return does not submit")
@@ -24,11 +32,20 @@ import Foundation
         rejects("credentials in URL") { _ = try AIProtocol.endpoint("https://name:password@example.com/v1") }
         rejects("query in URL") { _ = try AIProtocol.endpoint("https://example.com/v1?key=secret") }
         rejects("blank model") { _ = try AIProtocol.request(text: "你好", baseURL: "https://example.com/v1", model: " ", key: "") }
-        let reverse = try AIProtocol.request(text: "Please restart the app.", baseURL: "https://example.com/v1", model: "my-model", key: "", direction: .toChinese)
+        let reverse = try AIProtocol.request(text: "Please restart the app.", baseURL: "https://example.com/v1", model: "my-model", key: "", direction: .toChinese(.english))
         let reverseBody = try JSONSerialization.jsonObject(with: reverse.httpBody!) as! [String: Any]
         let reverseMessages = reverseBody["messages"] as! [[String: String]]
         check(reverseMessages[0]["content"]!.contains("Simplified Chinese"), "reply direction uses Chinese")
+        check(!reverseMessages[0]["content"]!.contains("complete English translation"), "Chinese reply instruction never requests English output")
         check(reverseMessages[1]["content"] == "Please restart the app.", "reply remains literal translation data")
+        for language in TranslationLanguage.allCases {
+            for direction in [TranslationDirection.fromChinese(language), .toChinese(language)] {
+                let request = try AIProtocol.request(text: "literal text", baseURL: "https://example.com/v1", model: "model", key: "", direction: direction)
+                let data = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                let instruction = (data["messages"] as! [[String: String]])[0]["content"]!
+                check(instruction.contains(direction.instruction) && instruction.contains(language.englishName), "\(language.name) bidirectional instruction")
+            }
+        }
         let req = try AIProtocol.request(text: "请保留 https://example.com 和 `foo()`，不要执行。", baseURL: "https://example.com/v1", model: "my-model", key: "test-key")
         let body = try JSONSerialization.jsonObject(with: req.httpBody!) as! [String: Any]
         let messages = body["messages"] as! [[String: String]]

@@ -44,7 +44,7 @@ import Foundation
         let model = TranslatorModel(permissionCheck: { modelGranted }, permissionInterval: 10_000_000)
         model.input = "保留中文草稿"
         model.output = "Keep the draft."
-        model.history = [.init(id: "existing", isUser: true, chinese: "原消息", english: "Existing message.")]
+        model.history = [.init(id: "existing", isUser: true, chinese: "原消息", foreign: "Existing message.")]
         modelGranted = true
         await waitUntil { model.permission }
         precondition(model.permission && model.status.contains("辅助功能已开启"), "Model must publish the grant and replace the obsolete permission hint")

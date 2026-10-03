@@ -29,6 +29,12 @@ import AppKit
         view.keyDown(with: event())
         precondition(submissions == 1, "busy editor must not submit")
         print("PASS: disabled editor blocks duplicate submit")
-        print("4 native editor tests passed")
+        let reader = LongMessageReader.makeScrollView()
+        let body = reader.documentView as! NSTextView
+        let long = String(repeating: "完整的超长中文段落。\n", count: 12_000) + "COMPLETE-END"
+        body.string = long
+        precondition(body.string == long && body.string.hasSuffix("COMPLETE-END") && !body.isEditable && body.isSelectable)
+        print("PASS: native long message reader retains the entire >100k body without editable or giant SwiftUI text")
+        print("5 native editor tests passed")
     }
 }

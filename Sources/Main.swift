@@ -6,6 +6,7 @@ import Carbon
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static weak var shared: AppDelegate?
     let model = TranslatorModel()
+    let usage = ClaudeUsageMonitor()
     var window: NSWindow!
     var statusItem: NSStatusItem!
     var hotKey: EventHotKeyRef?
@@ -17,22 +18,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 670, height: 780),
                           styleMask: [.titled, .closable, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         window.title = "A畜伴侣 · Claude 双向翻译"
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        NSApp.applicationIconImage = CompanionIcon.image(size: 256)
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 630, height: 710)
         window.delegate = self
-        window.contentView = NSHostingView(rootView: MainView(model: model))
+        window.contentView = NSHostingView(rootView: MainView(model: model, usage: usage))
         window.center()
         window.level = .floating
         (window as? NSPanel)?.hidesOnDeactivate = false
         model.replies.showPanel = { [weak self] in self?.window.orderFrontRegardless() }
-        model.replies.onReply = { [weak self] id, english, chinese in
-            self?.model.recordReply(id: id, english: english, chinese: chinese)
+        model.replies.onReply = { [weak self] id, foreign, chinese, language in
+            self?.model.recordReply(id: id, foreign: foreign, chinese: chinese, language: language)
         }
+        model.replies.onReplyObserved = { [weak self] in self?.usage.refresh() }
+        usage.refresh()
         model.hideWindow = { [weak self] in self?.window.orderOut(nil) }
         model.revealWindow = { [weak self] in self?.show(capture: false) }
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "character.bubble", accessibilityDescription: "A畜伴侣")
-        statusItem.button?.title = " A畜伴侣"
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.button?.image = CompanionIcon.image(size: 20, template: true)
+        statusItem.button?.title = ""
+        statusItem.button?.toolTip = "A畜伴侣"
         let menu = NSMenu()
         let open = NSMenuItem(title: "打开A畜伴侣    ⌃⌥E", action: #selector(openPanel), keyEquivalent: "")
         open.target = self; menu.addItem(open)
@@ -86,7 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         show(capture: false); return true
     }
-    func applicationWillTerminate(_ notification: Notification) { model.stopPermissionMonitoring() }
+    func applicationWillTerminate(_ notification: Notification) { model.stopPermissionMonitoring(); usage.stop() }
 }
 
 @main struct AChuCompanionApp {

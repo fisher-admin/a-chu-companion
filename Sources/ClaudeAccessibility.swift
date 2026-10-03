@@ -67,53 +67,101 @@ final class ClaudeSource: @unchecked Sendable {
         }
         return contains(window, depth: 0)
     }
-    func snapshot() throws -> ReplySnapshot {
+    func capture() async throws -> ReplySnapshot {
+        let work = Task.detached(priority: .utility) { try await self.snapshot() }
+        return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+    }
+
+    private func snapshot() async throws -> ReplySnapshot {
         guard AXIsProcessTrusted() else { throw BridgeError.message("辅助功能权限已关闭，自动读取已停止。") }
         guard isInCurrentWindow() else { throw BridgeError.message("原对话已不在当前窗口中，自动读取已停止。请重新选择 Claude 会话。") }
         let conversation = fixture ? "fixture://chat/test" : Self.urlString(root)
         guard fixture || (URL(string: conversation)?.host == "claude.ai" && (URL(string: conversation)?.path.hasPrefix("/chat/") == true || ["/new", "/"].contains(URL(string: conversation)?.path ?? ""))) else {
             throw BridgeError.message("Claude 对话页面已关闭或切换，自动读取已停止。")
         }
-        let started = Date()
-        var count = 0
-        var characters = 0
-        let names = [kAXRoleAttribute, kAXDescriptionAttribute, kAXTitleAttribute, kAXValueAttribute, kAXChildrenAttribute] as CFArray
-        func read(_ element: AXUIElement, depth: Int) throws -> ReplyNode {
-            count += 1
-            guard count <= 1_800, depth <= 50, characters < 90_000, Date().timeIntervalSince(started) < 2.5 else {
-                throw BridgeError.message("本页内容过长或响应较慢，已停止读取。请打开较短的对话后重试。")
-            }
-            AXUIElementSetMessagingTimeout(element, 0.15)
+        let metadata = [kAXRoleAttribute, kAXDescriptionAttribute, kAXTitleAttribute, kAXChildrenAttribute] as CFArray
+        let skipRoles = ["AXTextArea", "AXTextField", "AXToolbar", "AXButton", "AXPopUpButton", "AXCheckBox"]
+        var visited = 0
+        func info(_ element: AXUIElement, depth: Int) async throws -> (String, String, [AXUIElement]) {
+            try Task.checkCancellation()
+            visited += 1
+            // Structural safety bounds are unrelated to message character count.
+            guard depth <= 80, visited <= 1_000_000 else { throw BridgeError.message("对话界面结构异常，无法完整读取，请重新连接。") }
+            if visited.isMultiple(of: 64) { await Task.yield() }
+            AXUIElementSetMessagingTimeout(element, 0.5)
             var raw: CFArray?
-            guard AXUIElementCopyMultipleAttributeValues(element, names, [], &raw) == .success, let values = raw as? [Any], values.count == 5 else {
-                throw BridgeError.message("Claude 界面暂时不可读取，请保持目标会话打开后重新尝试。")
+            guard AXUIElementCopyMultipleAttributeValues(element, metadata, [], &raw) == .success,
+                  let values = raw as? [Any], values.count == 4 else { throw BridgeError.message("Claude 界面暂时不可读取，请保持目标会话打开后重试。") }
+            for value in values {
+                if CFGetTypeID(value as CFTypeRef) == AXValueGetTypeID() {
+                    let failure = value as! AXValue
+                    guard AXValueGetType(failure) == .axError else { continue }
+                    var error = AXError.success
+                    AXValueGetValue(failure, .axError, &error)
+                    guard error == .attributeUnsupported || error == .noValue else {
+                        throw BridgeError.message("Claude 消息结构未完整返回，本次读取已丢弃，请重试。")
+                    }
+                }
             }
             let role = values[0] as? String ?? ""
             let description = values[1] as? String ?? ""
-            let title = values[2] as? String ?? ""
-            let label = description.isEmpty ? title : description
-            let text = values[3] as? String ?? ""
-            // Read no sidebar history, editable drafts, notifications, or toolbar data.
-            if ["Sidebar", "Notifications", "Message actions"].contains(label) || ["AXTextArea", "AXTextField", "AXToolbar", "AXButton", "AXPopUpButton", "AXCheckBox"].contains(role) {
-                return ReplyNode(role: role, label: label)
-            }
-            characters += text.count
-            let children = values[4] as? [AXUIElement] ?? []
-            return ReplyNode(role: role, label: label, text: text, children: try children.map { try read($0, depth: depth + 1) })
+            let label = description.isEmpty ? (values[2] as? String ?? "") : description
+            return (role, label, values[3] as? [AXUIElement] ?? [])
         }
-        let tree = try read(root, depth: 0)
-        func transcript(_ node: ReplyNode) -> ReplyNode? {
-            if node.label == "Chat messages" { return node }
-            for child in node.children { if let found = transcript(child) { return found } }
+        func findTranscript(_ element: AXUIElement, depth: Int) async throws -> AXUIElement? {
+            let (role, label, children) = try await info(element, depth: depth)
+            if label == "Chat messages" { return element }
+            if skipRoles.contains(role) || ["Sidebar", "Notifications", "Message actions"].contains(label) { return nil }
+            for child in children {
+                if let found = try await findTranscript(child, depth: depth + 1) { return found }
+            }
             return nil
         }
-        guard let region = transcript(tree) else {
-            if !fixture && URL(string: conversation)?.path.hasPrefix("/chat/") == true {
-                throw BridgeError.message("当前页面没有可识别的 Claude 消息区，自动读取已停止。")
-            }
+        guard let region = try await findTranscript(root, depth: 0) else {
+            if !fixture && URL(string: conversation)?.path.hasPrefix("/chat/") == true { throw BridgeError.message("当前页面没有可识别的 Claude 消息区，请重新连接。") }
             return ReplySnapshot(conversation: conversation, messages: [], foundTranscript: false)
         }
-        let messages = ClaudeDecoder.messages(region)
+        var elements: [(ordinal: Int, total: Int, element: AXUIElement)] = []
+        func newest(_ element: AXUIElement, depth: Int) async throws {
+            guard elements.count < 8 else { return }
+            let (role, label, children) = try await info(element, depth: depth)
+            let words = label.split(separator: " ")
+            if words.count == 4, words[0] == "Message", words[2] == "of", let ordinal = Int(words[1]), let total = Int(words[3]) {
+                elements.append((ordinal, total, element)); return
+            }
+            guard !skipRoles.contains(role) else { return }
+            for child in children.reversed() { try await newest(child, depth: depth + 1) }
+        }
+        try await newest(region, depth: 0)
+        elements.sort { $0.ordinal < $1.ordinal }
+        if let latest = elements.last {
+            guard latest.ordinal == latest.total, Set(elements.map(\.ordinal)).count == elements.count,
+                  elements.allSatisfy({ $0.total == latest.total }) else { throw BridgeError.message("Claude 消息区正在更新，等待完整消息后重试。") }
+        }
+        func read(_ element: AXUIElement, depth: Int) async throws -> ReplyNode {
+            let (role, label, children) = try await info(element, depth: depth)
+            if ["Sidebar", "Notifications", "Message actions"].contains(label) || skipRoles.contains(role) { return ReplyNode(role: role, label: label) }
+            // No page-wide text reads and no character cap; only complete bodies
+            // of the most recent, author-marked messages are retained.
+            var text = ""
+            if ["AXStaticText", "AXListMarker"].contains(role) {
+                var value: CFTypeRef?
+                let result = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value)
+                guard result == .success || result == .attributeUnsupported || result == .noValue else {
+                    throw BridgeError.message("消息文字尚未完整返回，已丢弃本次读取，请重试。")
+                }
+                text = value as? String ?? ""
+            }
+            var nodes: [ReplyNode] = []
+            for child in children { nodes.append(try await read(child, depth: depth + 1)) }
+            return ReplyNode(role: role, label: label, text: text, children: nodes)
+        }
+        var nodes: [ReplyNode] = []
+        for element in elements { nodes.append(try await read(element.element, depth: 0)) }
+        try Task.checkCancellation()
+        guard isInCurrentWindow(), fixture || Self.urlString(root) == conversation else { throw BridgeError.message("读取期间对话已切换，本次内容已丢弃，请重新连接。") }
+        let messages = ClaudeDecoder.messages(.init(role: "AXGroup", label: "Chat messages", children: nodes))
+        guard messages.count == elements.count else { throw BridgeError.message("消息正文或作者标记不完整，未使用部分内容，请重试。") }
         return ReplySnapshot(conversation: conversation, messages: messages, foundTranscript: true)
     }
 }

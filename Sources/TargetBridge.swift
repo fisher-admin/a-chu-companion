@@ -53,7 +53,7 @@ final class TargetBridge {
               (attribute(element, kAXSubroleAttribute) as? String) != kAXSecureTextFieldSubrole,
               (attribute(element, kAXEnabledAttribute) as? Bool) != false,
               let window = elementAttribute(element, kAXWindowAttribute) ?? elementAttribute(axApp, kAXFocusedWindowAttribute) else {
-            throw BridgeError.message("尚未识别到可输入文字的对话框。请点击聊天输入框后再按 ⌃⌥E；仍不支持时可使用「仅翻译」和「复制英文」。")
+            throw BridgeError.message("尚未识别到可输入文字的对话框。请点击聊天输入框后再按 ⌃⌥E；仍不支持时可使用「仅翻译」和「复制译文」。")
         }
         return Target(app: app, element: element, window: window,
                       value: attribute(element, kAXValueAttribute) as? String, selection: selectedRange(element), conversation: conversationURL(element))
@@ -108,7 +108,7 @@ final class TargetBridge {
     }
     static func deliver(_ text: String, to target: Target, autoSend: Bool, commandReturn: Bool,
                         hide: () -> Void) async throws -> Outcome {
-        guard trusted, !target.app.isTerminated else { throw BridgeError.message("目标软件已关闭或辅助功能权限不可用。英文已保留。") }
+        guard trusted, !target.app.isTerminated else { throw BridgeError.message("目标软件已关闭或辅助功能权限不可用。译文已保留。") }
         guard NSApp.isActive || NSApp.keyWindow?.isKeyWindow == true else { throw BridgeError.message("你已切换到其他软件，本次没有自动填入。请重新选择目标输入框。") }
         let existing = attribute(target.element, kAXValueAttribute) as? String
         guard existing == target.value, selectedRange(target.element) == target.selection else {
@@ -124,7 +124,7 @@ final class TargetBridge {
         }
         guard matches(target), attribute(target.element, kAXValueAttribute) as? String == target.value,
               selectedRange(target.element) == target.selection else {
-            throw BridgeError.message("原输入框未恢复焦点，已停止填入。英文已保留，可手动复制。")
+            throw BridgeError.message("原输入框未恢复焦点，已停止填入。译文已保留，可手动复制。")
         }
         _ = try validatedConversation(target)
         let board = NSPasteboard.general
@@ -158,10 +158,12 @@ final class TargetBridge {
         }
         var confirmed = false
         // Keep the clipboard available while the destination processes the paste.
-        for _ in 0..<24 {
+        var stableMatches = 0
+        for _ in 0..<600 {
             try await Task.sleep(for: .milliseconds(50))
             guard matches(target) else { throw BridgeError.message("粘贴后焦点改变，未自动发送。请检查原输入框。") }
-            if pasteConfirmed() { confirmed = true }
+            stableMatches = pasteConfirmed() ? stableMatches + 1 : 0
+            if stableMatches >= 3 { confirmed = true; break }
         }
         guard confirmed, pasteConfirmed() else { return .unconfirmed }
         guard autoSend else { return .inserted }

@@ -4,22 +4,31 @@ import Translation
 struct MainView: View {
     @ObservedObject var model: TranslatorModel
     @ObservedObject var replies: ReplyMonitor
-    init(model: TranslatorModel) { self.model = model; self.replies = model.replies }
+    @ObservedObject var usage: ClaudeUsageMonitor
+    init(model: TranslatorModel, usage: ClaudeUsageMonitor) { self.model = model; self.replies = model.replies; self.usage = usage }
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 11) {
-                Image(systemName: "character.bubble.fill").font(.system(size: 25)).foregroundStyle(.white)
-                    .frame(width: 44, height: 44).background(Color.blue.gradient, in: RoundedRectangle(cornerRadius: 13))
+                Image(nsImage: CompanionIcon.image(size: 44)).frame(width: 44, height: 44)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("A畜伴侣").font(.system(size: 21, weight: .semibold))
                     Text("和 Claude 聊天，用中文就好").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer()
+                ClaudeUsageView(usage: usage)
                 Button { model.clearHistory() } label: { Image(systemName: "trash") }
                     .buttonStyle(.plain).help("清空本地显示，不删除 Claude 会话").accessibilityLabel("清空本地对话").disabled(model.busy)
                 Button { model.showSettings = true } label: { Image(systemName: "gearshape") }
                     .buttonStyle(.plain).accessibilityLabel("翻译设置").disabled(model.busy)
             }.padding(.horizontal, 22).padding(.top, 20).padding(.bottom, 14)
+            HStack {
+                Text("中文 ⇄").font(.system(size: 12)).foregroundStyle(.secondary)
+                Picker("对方语言", selection: $model.language) {
+                    ForEach(TranslationLanguage.allCases) { language in Text(language.name).tag(language) }
+                }.labelsHidden().frame(width: 108).disabled(model.busy || replies.translating)
+                Spacer()
+                Text("输入中文 · 回复译回中文").font(.system(size: 11)).foregroundStyle(.secondary)
+            }.padding(.horizontal, 22).padding(.bottom, 12)
             HStack(spacing: 7) {
                 Circle().fill(model.hasTarget ? .green : .orange).frame(width: 7, height: 7)
                 Text(model.hasTarget ? "已连接 · " + model.targetName : "先点击 Claude 输入框，再按 ⌃⌥E 连接")
@@ -39,11 +48,11 @@ struct MainView: View {
             }
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 18) {
                         if model.history.isEmpty {
                             VStack(alignment: .leading, spacing: 10) {
                                 Text("你好，直接说中文吧。").font(.system(size: 20, weight: .medium))
-                                Text("你写中文，我帮你译成英文发给 Claude。\nClaude 的回复会译成中文，出现在这里。")
+                                Text("你写中文，我帮你译成所选语言发给 Claude。\nClaude 的回复会译成中文，出现在这里。")
                                     .font(.system(size: 14)).foregroundStyle(.secondary).lineSpacing(6)
                                 Text("同一个页面，继续聊下去。").font(.system(size: 12)).foregroundStyle(.tertiary)
                             }.padding(.vertical, 35).frame(maxWidth: .infinity, alignment: .leading)
@@ -64,9 +73,12 @@ struct MainView: View {
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(22)
                 }.frame(minHeight: 260)
-                    .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
-                    .onChange(of: model.history.count) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
-                    .onChange(of: replies.chinese) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
+                    .background(Color.primary.opacity(0.025))
+                    .task(id: model.chatRevision) {
+                        await Task.yield()
+                        guard !Task.isCancelled else { return }
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
             }
             Divider()
             VStack(alignment: .leading, spacing: 10) {
@@ -82,12 +94,13 @@ struct MainView: View {
                             .padding(.horizontal, 17).padding(.vertical, 12).allowsHitTesting(false)
                     }
                 }.frame(height: 105)
-                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
                 HStack {
                     Text("回车提交 · Shift + 回车换行").font(.system(size: 10)).foregroundStyle(.secondary)
                     Spacer()
-                    Text("\(model.input.count) / 12,000").font(.system(size: 10)).foregroundStyle(.tertiary)
+                    Text("\(model.input.count.formatted()) / 10,000 字").font(.system(size: 10))
+                        .foregroundStyle(model.input.count > InputPolicy.limit ? .orange : .secondary)
                 }
                 HStack(spacing: 14) {
                     Toggle("自动译回中文", isOn: $replies.enabled).toggleStyle(.switch)
@@ -105,20 +118,21 @@ struct MainView: View {
                         Text("正在处理…").font(.system(size: 12)).foregroundStyle(.secondary)
                     } else {
                         Button("读取当前回复") { model.readCurrentReply() }.disabled(!model.hasTarget)
-                        Button("仅翻译") { model.begin(insert: false) }.disabled(model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        Button("仅翻译") { model.begin(insert: false) }.disabled(model.input.count > InputPolicy.limit || model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         if !model.output.isEmpty { Button("填入译文") { model.insertResult() }.disabled(!model.hasTarget) }
                         Spacer(minLength: 0)
                         Button(model.autoSend ? "发送给 Claude" : "翻译并填入") { model.begin(insert: true) }
                             .buttonStyle(.borderedProminent)
-                            .disabled(!model.hasTarget || model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(!model.hasTarget || model.input.count > InputPolicy.limit || model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }.controlSize(.regular)
             }.padding(18)
         }.frame(minWidth: 610, minHeight: 670)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(GlassBackground().ignoresSafeArea())
             .translationTask(model.configuration) { session in await model.runApple(session) }
             .translationTask(replies.reverseConfiguration) { session in await replies.runSystemReply(session) }
             .sheet(isPresented: $model.showSettings) { SettingsView(model: model) }
+            .sheet(isPresented: $usage.showConnection) { ClaudeUsageConnectionView(usage: usage) }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.refreshPermission() }
     }
 }
@@ -131,15 +145,16 @@ struct ChatBubble: View {
             if item.isUser { Spacer(minLength: 55) }
             VStack(alignment: .leading, spacing: 8) {
                 Text(item.isUser ? "你" : "Claude · 中文译文").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-                Text(item.chinese).font(.system(size: 15)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                if !item.english.isEmpty {
-                    DisclosureGroup("英文原文", isExpanded: $expanded) {
-                        Text(item.english).font(.system(size: 12)).foregroundStyle(.secondary).textSelection(.enabled)
+                MessageText(text: item.chinese)
+                if !item.foreign.isEmpty {
+                    DisclosureGroup(item.language.name + "原文", isExpanded: $expanded) {
+                        MessageText(text: item.foreign, original: true)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 5)
                     }.font(.system(size: 10))
                 }
             }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
-                .background(item.isUser ? Color.blue.opacity(0.1) : Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(item.isUser ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.07)))
             if !item.isUser { Spacer(minLength: 35) }
         }
     }
@@ -163,7 +178,7 @@ struct SettingsView: View {
             }.pickerStyle(.segmented)
             if engine == "apple" {
                 Label("无需 API 密钥", systemImage: "checkmark.seal").font(.headline)
-                Text("使用苹果系统的中译英能力。首次使用可能提示下载语言包，请按系统提示继续。复杂表达建议先查看英文结果，再决定是否开启自动发送。")
+                Text("使用苹果系统翻译。可在主窗口选择英文、德文、日文或韩文，回复始终译回中文。首次使用某种语言可能需要下载语言包；发送前建议检查译文。")
                     .font(.system(size: 13)).foregroundStyle(.secondary)
             } else {
                 Text("使用支持 OpenAI 兼容格式的服务。你的中文和读取到的 Claude 回复会发送到该地址翻译；费用由该服务收取。")

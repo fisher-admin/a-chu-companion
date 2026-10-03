@@ -9,17 +9,37 @@ final class TranslatorModel: ObservableObject {
         let id: String
         let isUser: Bool
         var chinese: String
-        var english: String
+        var foreign: String
+        var language: TranslationLanguage = .english
     }
     @Published var history: [ChatItem] = []
-    func recordReply(id: String, english: String, chinese: String) {
-        if let i = history.firstIndex(where: { $0.id == id }) { history[i].english = english; history[i].chinese = chinese }
-        else { history.append(.init(id: id, isUser: false, chinese: chinese, english: english)) }
+    @Published private(set) var chatRevision = 0
+    func recordReply(id: String, foreign: String, chinese: String, language: TranslationLanguage) {
+        if let i = history.firstIndex(where: { $0.id == id }) { history[i].foreign = foreign; history[i].chinese = chinese; history[i].language = language }
+        else { history.append(.init(id: id, isUser: false, chinese: chinese, foreign: foreign, language: language)) }
         if history.count > 40 { history.removeFirst(history.count - 40) }
+        chatRevision += 1
     }
-    func clearHistory() { history = []; input = ""; output = ""; replies.stop(clear: true) }
-    @Published var input = "" { didSet { if input != oldValue && !busy { output = "" } } }
+    func clearHistory() { history = []; input = ""; output = ""; replies.stop(clear: true); chatRevision += 1 }
+    @Published var input = "" {
+        didSet {
+            if input != oldValue && !busy {
+                output = ""
+                if input.count > InputPolicy.limit { report("中文内容超过 10,000 字符，请缩短后提交。草稿已完整保留。", error: true) }
+                else if oldValue.count > InputPolicy.limit { report("字数已符合要求，可以提交。") }
+            }
+        }
+    }
     @Published var output = ""
+    @Published var language = TranslationLanguage(rawValue: UserDefaults.standard.string(forKey: "targetLanguage") ?? "en") ?? .english {
+        didSet {
+            guard language != oldValue else { return }
+            UserDefaults.standard.set(language.rawValue, forKey: "targetLanguage")
+            output = ""; configuration = nil; replies.stop()
+            report("已选择\(language.name)，Claude 的回复将译回中文。")
+        }
+    }
+    private var outputLanguage: TranslationLanguage = .english
     @Published var busy = false
     @Published var status = "点击聊天输入框，再按 ⌃⌥E 唤出A畜伴侣。"
     @Published var isError = false
@@ -43,6 +63,8 @@ final class TranslatorModel: ObservableObject {
     private var target: TargetBridge.Target?
     private var task: Task<Void, Never>?
     private var appleSession: TranslationSession?
+    private var preparationWatchdog: Task<Void, Never>?
+    private let applePreparationTimeout: Duration
     private var activeID: UUID?
     private var pending: Job?
     private struct Job {
@@ -52,10 +74,13 @@ final class TranslatorModel: ObservableObject {
         let target: TargetBridge.Target?
         let send: Bool
         let commandReturn: Bool
+        let language: TranslationLanguage
     }
 
     init(permissionCheck: @escaping @MainActor () -> Bool = { TargetBridge.trusted },
-         permissionInterval: UInt64 = 1_000_000_000) {
+         permissionInterval: UInt64 = 1_000_000_000,
+         applePreparationTimeout: Duration = .seconds(120)) {
+        self.applePreparationTimeout = applePreparationTimeout
         permission = permissionCheck()
         permissionMonitor = AccessibilityPermissionMonitor(check: permissionCheck, interval: permissionInterval)
         permissionMonitor.onChange = { [weak self] granted in
@@ -82,7 +107,7 @@ final class TranslatorModel: ObservableObject {
             target = try TargetBridge.capture()
             targetName = target!.name
             hasTarget = true
-            status = "英文将填入 \(targetName) 的原输入框。"
+            status = "\(language.name)译文将填入 \(targetName) 的原输入框。"
             isError = false
         } catch {
             target = nil; hasTarget = false; targetName = "未选择输入框"
@@ -98,7 +123,8 @@ final class TranslatorModel: ObservableObject {
         UserDefaults.standard.set(engine, forKey: "engine")
         UserDefaults.standard.set(baseURL, forKey: "baseURL")
         UserDefaults.standard.set(aiModel, forKey: "aiModel")
-        report("翻译设置已保存。")
+        replies.stop()
+        report("翻译设置已保存，下一次发送或读取将使用新设置。")
     }
     func begin(insert: Bool) {
         guard !busy else { return }
@@ -106,43 +132,64 @@ final class TranslatorModel: ObservableObject {
             let text = try InputPolicy.validated(input)
             if insert && target == nil { throw BridgeError.message("请先点击目标聊天输入框，再按 ⌃⌥E；也可以先点「仅翻译」。") }
             let destination = insert ? try target.map { try TargetBridge.refresh($0) } : target
-            let job = Job(id: UUID(), text: text, insert: insert, target: destination, send: autoSend, commandReturn: commandReturn)
-            var request: URLRequest?
-            if engine == "ai" { request = try AIProtocol.request(text: text, baseURL: baseURL, model: aiModel, key: Credentials.read()) }
+            let job = Job(id: UUID(), text: text, insert: insert, target: destination, send: autoSend, commandReturn: commandReturn, language: language)
+            let useAI = engine == "ai"
+            let key = useAI ? try Credentials.read() : ""
+            let base = baseURL; let model = aiModel
+            if useAI { _ = try AIProtocol.request(text: "测试", baseURL: base, model: model, key: key, direction: .fromChinese(job.language)) }
             activeID = job.id; pending = job; busy = true; output = ""
-            history.append(.init(id: job.id.uuidString, isUser: true, chinese: text, english: ""))
+            history.append(.init(id: job.id.uuidString, isUser: true, chinese: text, foreign: "", language: job.language))
             if history.count > 40 { history.removeFirst(history.count - 40) }
+            chatRevision += 1
             report(engine == "apple" ? "正在使用系统翻译… 首次使用可能需要下载语言包。" : "正在翻译…")
-            if let request {
+            if useAI {
                 task = Task {
-                    do { try await finish(try await AITranslator.translate(request), job: job) }
-                    catch { failed(error, id: job.id) }
+                    do {
+                        let result = try await TextTranslation.run(text, progress: { [weak self] part, total in
+                            self?.report("正在翻译为\(job.language.name)… \(part) / \(total) 段")
+                        }) { chunk in
+                            let request = try AIProtocol.request(text: chunk, baseURL: base, model: model, key: key, direction: .fromChinese(job.language))
+                            return try await AITranslator.translate(request)
+                        }
+                        try await finish(result, job: job)
+                    } catch { failed(error, id: job.id) }
                 }
             } else {
+                preparationWatchdog = Task { [weak self] in
+                    do {
+                        try await Task.sleep(for: self?.applePreparationTimeout ?? .seconds(120))
+                        self?.failed(TranslationChunkError.timedOut, id: job.id)
+                    } catch { /* The system callback or cancellation ended this wait. */ }
+                }
                 if configuration == nil {
-                    configuration = .init(source: .init(identifier: "zh-Hans"), target: .init(identifier: "en"))
+                    configuration = .init(source: .init(identifier: "zh-Hans"), target: .init(identifier: job.language.rawValue))
                 } else { configuration?.invalidate() }
             }
         } catch { report(error.localizedDescription, error: true) }
     }
     func runApple(_ session: TranslationSession) async {
         guard let job = pending, activeID == job.id, busy else { return }
+        preparationWatchdog?.cancel(); preparationWatchdog = nil
         appleSession = session
         do {
-            try await session.prepareTranslation()
+            _ = try await TextTranslation.withDeadline { try await session.prepareTranslation(); return "" }
             try Task.checkCancellation()
-            let result = try await session.translate(job.text)
-            try await finish(result.targetText, job: job)
+            let result = try await TextTranslation.run(job.text, progress: { [weak self] part, total in
+                self?.report("正在翻译为\(job.language.name)… \(part) / \(total) 段")
+            }) { chunk in try await session.translate(chunk).targetText }
+            try await finish(result, job: job)
         } catch { failed(error, id: job.id) }
     }
     private func finish(_ translated: String, job: Job) async throws {
         guard activeID == job.id, !Task.isCancelled else { return }
         guard !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw BridgeError.message("翻译结果为空，请重试。") }
-        output = translated
-        if let index = history.firstIndex(where: { $0.id == job.id.uuidString }) { history[index].english = translated }
+        try ForeignTextPolicy.validate(translated, incoming: false)
+        output = translated; outputLanguage = job.language
+        if let index = history.firstIndex(where: { $0.id == job.id.uuidString }) { history[index].foreign = translated }
+        chatRevision += 1
         if job.insert, let target = job.target {
             report("翻译完成，正在检查原输入框…")
-            await replies.arm(target: target, outbound: translated, engine: engine, baseURL: baseURL, model: aiModel)
+            await replies.arm(target: target, outbound: translated, engine: engine, baseURL: baseURL, model: aiModel, language: job.language)
             guard activeID == job.id, !Task.isCancelled else { return }
             let outcome = try await TargetBridge.deliver(translated, to: target, autoSend: job.send,
                                                         commandReturn: job.commandReturn, hide: hideWindow)
@@ -159,16 +206,16 @@ final class TranslatorModel: ObservableObject {
             self.target = target
             hasTarget = true
             if input == job.text { input = "" }
-        } else { report("翻译完成，可以检查或复制英文。") }
+        } else { report("翻译完成，可以检查或复制译文。") }
         busy = false; pending = nil; activeID = nil; appleSession = nil
     }
     func insertResult() {
         guard !busy, !output.isEmpty else { return }
-        guard let target else { report("请先回到目标输入框，再按 ⌃⌥E，然后点击「填入英文」。", error: true); return }
+        guard let target else { report("请先回到目标输入框，再按 ⌃⌥E，然后点击「填入译文」。", error: true); return }
         let refreshed: TargetBridge.Target
         do { refreshed = try TargetBridge.refresh(target) }
         catch { report(error.localizedDescription, error: true); return }
-        let job = Job(id: UUID(), text: input, insert: true, target: refreshed, send: autoSend, commandReturn: commandReturn)
+        let job = Job(id: UUID(), text: input, insert: true, target: refreshed, send: autoSend, commandReturn: commandReturn, language: outputLanguage)
         let result = output
         activeID = job.id; busy = true
         task = Task {
@@ -178,16 +225,20 @@ final class TranslatorModel: ObservableObject {
     }
     private func failed(_ error: Error, id: UUID) {
         guard activeID == id else { return }
+        preparationWatchdog?.cancel(); preparationWatchdog = nil
+        if #available(macOS 26.0, *) { appleSession?.cancel() }
         busy = false; pending = nil; activeID = nil; appleSession = nil
+        configuration = nil
         replies.stop()
         if error is CancellationError { report("已取消，中文内容已保留。") }
         else {
-            report(error.localizedDescription + (output.isEmpty ? "" : " 英文已保留，可复制使用。"), error: true)
+            report(error.localizedDescription + (output.isEmpty ? "" : " 译文已保留，可复制使用。"), error: true)
             if !NSApp.isActive { revealWindow() }
         }
     }
     func cancel() {
         replies.stop()
+        preparationWatchdog?.cancel(); preparationWatchdog = nil
         activeID = nil; pending = nil; task?.cancel(); task = nil
         if #available(macOS 26.0, *) { appleSession?.cancel() }
         appleSession = nil; configuration = nil; busy = false
@@ -195,12 +246,12 @@ final class TranslatorModel: ObservableObject {
     }
     func readCurrentReply() {
         guard !busy, let target else { report("请先点击 Claude 输入框，再按 ⌃⌥E。", error: true); return }
-        Task { await replies.followExisting(target: target, engine: engine, baseURL: baseURL, model: aiModel) }
+        Task { await replies.followExisting(target: target, engine: engine, baseURL: baseURL, model: aiModel, language: language) }
     }
     func copyOutput() {
         guard !output.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(output, forType: .string)
-        report("英文已复制。")
+        report("译文已复制。")
     }
 }
