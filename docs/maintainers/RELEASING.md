@@ -2,6 +2,8 @@
 
 Current releases provide source. Do not distribute the maintainer's local signed bundle, Keychain, certificates, or sessions. / 当前以源码发布，不分发维护者本机签名包、钥匙串、证书或登录会话。
 
+[Open-source verification record / 开源验收记录](OPEN_SOURCE_CHECKLIST.md)
+
 1. Update CFBundleShortVersionString and CFBundleVersion in build.sh for application changes. Keep build numbers increasing; documentation-only preparation may retain the app version. / 应用改动更新版本及递增构建号；仅开源配置和文档可保留应用版本。
 2. Add dated changes and tested scope to CHANGELOG and TEST_PLAN. Keep earlier entries, tags, and Git history. Never move a published tag to a different commit. / 补充日期、变化和验证范围，保留旧条目；已发布标签不得移动。
 3. Run repository checks with --history, offline tests, loopback HTTP, and unsigned build. For install changes, also verify normal signing continuity locally. / 检查全部历史及本机测试；安装改动另验固定签名。
