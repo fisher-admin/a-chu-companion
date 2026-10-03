@@ -11,3 +11,5 @@ Current releases provide source. Do not distribute the maintainer's local signed
 7. GitHub generates source archives. Additional binaries require a separate distribution identity, notarization, and validation on a clean Mac; do not label a CI unsigned build as notarized or ready for general installation. / 额外二进制需发行签名、公证及干净 Mac 验证，不能把 CI 包当成公证安装包。
 
 Repository defaults: squash merges, automatic merged-branch deletion, read-only Actions tokens, pinned official actions, approval for outside contributors, weekly action updates, CodeQL security analysis, private vulnerability reporting, secret scanning/push protection, and main branch protection. Owner-admin bypass remains available for maintenance; never use it to skip verification. / 默认合并、安全及 main 保护以实际 GitHub 设置为准，维护者权限不得代替验证。
+
+Published v* tags have a ruleset that blocks updates and deletion while allowing new tags. Publish a new version for a correction instead of replacing an old tag. / v* 标签允许新增，阻止更改和删除；已发布版本需要修正时新增版本，不替换旧标签。
