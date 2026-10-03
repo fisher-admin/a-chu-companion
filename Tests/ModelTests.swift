@@ -27,7 +27,7 @@ import AppKit
         print("PASS: changing language clears stale output without capturing or sending")
         model.begin(insert: false)
         precondition(model.busy && model.history.last?.language == .german)
-        try await Task.sleep(for: .milliseconds(70))
+        try await waitUntil { !model.busy }
         precondition(!model.busy && model.isError && model.configuration == nil && model.input == "保留中文草稿")
         print("PASS: a missing system translation callback ends waiting and preserves the draft")
         model.begin(insert: false)
@@ -105,5 +105,14 @@ import AppKit
         fresh.stopPermissionMonitoring()
         print("PASS: a new application restores language and font size but has no persisted chat records")
         print("16 multilingual model tests passed")
+    }
+
+    @MainActor static func waitUntil(_ condition: () -> Bool) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while !condition() {
+            precondition(clock.now < deadline, "Model state did not settle")
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 }

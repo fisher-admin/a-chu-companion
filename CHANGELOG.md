@@ -28,6 +28,7 @@ All existing Git commits and previous verification records are retained. Entries
 - Explicit verification-only --unsigned build in a separate directory; normal fixed-signature install unchanged. / 独立目录的显式无签名构建，正常固定签名安装保留。
 - Translation deadline tests tolerate hosted-runner scheduling and explicitly release late results after timeout; application deadlines are unchanged. / 翻译超时测试适应云端调度，超时后再释放迟到结果；应用等待时间未改。
 - Local HTTP fixture readiness has a bounded 30-second startup allowance with failure diagnostics. / 本机 HTTP 夹具允许最多 30 秒启动，并保留失败诊断。
+- Usage concurrency tests control simulated request completion instead of assuming millisecond timing; model preparation waits for its actual state. / 额度并发测试主动控制模拟返回，翻译准备测试等待实际状态。
 - Full original README archived; commit history is not rewritten. / 原 README 完整归档，不改写提交历史。
 
 Application validation: 157 regression checks plus seven loopback HTTP checks. See TEST_PLAN for native tests and gaps. / 应用验证为 157 项回归及 7 项本机 HTTP，实际界面验收及未验证范围见 TEST_PLAN。

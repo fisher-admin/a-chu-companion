@@ -5,6 +5,8 @@ final class UsageState: @unchecked Sendable {
     var requests = 0
     var account = "one"
     var error: ClaudeUsageError?
+    private var pending: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var completed: Set<Int> = []
     func connection() -> ClaudeSession {
         lock.lock(); defer { lock.unlock() }
         return .init(key: "sk-ant-sid01-fixtureonlyabcdefghijklmnop", organization: "12345678-1234-1234-1234-123456789abc", fingerprint: account)
@@ -16,9 +18,19 @@ final class UsageState: @unchecked Sendable {
         if let error { throw error }; return requests
     }
     func count() -> Int { lock.lock(); defer { lock.unlock() }; return requests }
+    func waiting(_ request: Int) -> Bool { lock.lock(); defer { lock.unlock() }; return pending[request] != nil }
+    func finished(_ request: Int) -> Bool { lock.lock(); defer { lock.unlock() }; return completed.contains(request) }
+    func complete(_ request: Int) {
+        lock.lock(); let continuation = pending.removeValue(forKey: request); lock.unlock()
+        precondition(continuation != nil, "The simulated request must be waiting before completion")
+        continuation?.resume()
+    }
     func fetch(_ connection: ClaudeSession) async throws -> (ClaudeUsageSnapshot, ClaudePlan) {
         let count = try begin()
-        try await Task.sleep(for: .milliseconds(35))
+        await withCheckedContinuation { continuation in
+            lock.lock(); pending[count] = continuation; lock.unlock()
+        }
+        lock.withLock { _ = completed.insert(count) }
         return (.init(fiveHour: .init(usedPercentage: connection.fingerprint == "one" ? Double(count) : 90, resetsAt: nil), sevenDay: nil, observedAt: Date()), .max)
     }
 }
@@ -46,29 +58,43 @@ final class UsageHTTP: URLProtocol, @unchecked Sendable {
         let monitor = ClaudeUsageMonitor(load: { _, _ in state.connection() }, fetch: { try await state.fetch($0) }, enabled: { true })
         defer { monitor.stop() }
         monitor.refresh()
-        try await Task.sleep(for: .milliseconds(10))
+        try await waitUntil("first request starts") { state.waiting(1) }
         for _ in 0..<8 { monitor.refresh() }
-        try await Task.sleep(for: .milliseconds(110))
+        state.complete(1)
+        try await waitUntil("coalesced follow-up starts") { state.waiting(2) }
+        state.complete(2)
+        try await waitUntil("coalesced refresh completes") { !monitor.refreshing }
         precondition(state.count() == 2 && !monitor.refreshing && monitor.snapshot?.fiveHour?.usedPercentage == 2)
         print("PASS: overlapping reply refreshes coalesce into one latest follow-up")
-        monitor.refresh(); try await Task.sleep(for: .milliseconds(10)); state.changeAccount()
-        try await Task.sleep(for: .milliseconds(110))
+        monitor.refresh()
+        try await waitUntil("old-account request starts") { state.waiting(3) }
+        state.changeAccount(); state.complete(3)
+        try await waitUntil("new-account request starts") { state.waiting(4) }
+        precondition(monitor.snapshot == nil && monitor.plan == .unknown)
+        state.complete(4)
+        try await waitUntil("new-account refresh completes") { !monitor.refreshing }
         precondition(monitor.snapshot?.fiveHour?.usedPercentage == 90 && monitor.plan == .max)
         print("PASS: an account switch discards the old in-flight result and fetches the current account")
-        state.fail(.network); monitor.refresh(); try await Task.sleep(for: .milliseconds(40))
+        state.fail(.network); monitor.refresh()
+        try await waitUntil("network failure is published") { monitor.stale && !monitor.refreshing }
         precondition(monitor.stale && monitor.snapshot?.fiveHour?.usedPercentage == 90)
         monitor.stop()
         print("PASS: a temporary failure marks the preserved reading as stale")
         let expiredState = UsageState(); expiredState.fail(.expired)
         let expired = ClaudeUsageMonitor(load: { _, _ in expiredState.connection() }, fetch: { try await expiredState.fetch($0) }, enabled: { true })
-        expired.refresh(); try await Task.sleep(for: .milliseconds(40))
+        expired.refresh()
+        try await waitUntil("expired credentials are handled") { !expired.refreshing }
         precondition(expired.snapshot == nil && expired.organization.isEmpty && !expired.refreshing)
         expired.stop()
         print("PASS: expired credentials clear account values without pretending usage is zero")
         state.fail(nil)
         let cancelled = ClaudeUsageMonitor(load: { _, _ in state.connection() }, fetch: { try await state.fetch($0) }, enabled: { true })
-        cancelled.refresh(); try await Task.sleep(for: .milliseconds(10)); cancelled.stop()
-        try await Task.sleep(for: .milliseconds(50))
+        let cancelledRequest = state.count() + 1
+        cancelled.refresh()
+        try await waitUntil("request starts before stopping") { state.waiting(cancelledRequest) }
+        cancelled.stop(); state.complete(cancelledRequest)
+        try await waitUntil("uncooperative late fetch completes") { state.finished(cancelledRequest) }
+        await Task.yield()
         precondition(cancelled.snapshot == nil && !cancelled.refreshing)
         print("PASS: stopping a connection prevents late results from appearing")
         for (capability, plan) in [("claude_pro", ClaudePlan.pro),("claude_max", .max),("raven", .team),("raven_enterprise", .enterprise),("chat", .free)] {
@@ -95,5 +121,14 @@ final class UsageHTTP: URLProtocol, @unchecked Sendable {
         }
         print("PASS: authentication, denial, throttling, server failure and redirects stay distinct from successful data")
         print("8 usage integration tests passed")
+    }
+
+    @MainActor static func waitUntil(_ event: String, _ condition: () -> Bool) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while !condition() {
+            precondition(clock.now < deadline, "Timed out waiting for \(event)")
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 }

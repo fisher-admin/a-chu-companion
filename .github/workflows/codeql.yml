@@ -49,11 +49,14 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
-      - name: Build Swift without personal signing data
+      - name: Compile all Swift sources for analysis
         if: matrix.language == 'swift'
-        env:
-          ACHU_SIGNING_CONFIG: /tmp/achu-codeql-no-signing-config.json
-        run: ./build.sh --unsigned
+        run: |
+          mkdir -p .build/cache
+          swiftc -swift-version 5 -Onone -whole-module-optimization \
+            -target arm64-apple-macos15.0 \
+            -module-cache-path "$PWD/.build/cache" \
+            Sources/*.swift -o .build/codeql-companion
       - name: Analyze
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
         with:
