@@ -35,6 +35,23 @@ import AppKit
         body.string = long
         precondition(body.string == long && body.string.hasSuffix("COMPLETE-END") && !body.isEditable && body.isSelectable)
         print("PASS: native long message reader retains the entire >100k body without editable or giant SwiftUI text")
-        print("5 native editor tests passed")
+        precondition(reader.scrollerStyle == .legacy && !reader.autohidesScrollers && reader.hasVerticalScroller)
+        print("PASS: long-message vertical scrollbar remains visible")
+        reader.contentView.scroll(to: NSPoint(x: 0, y: 200))
+        let position = reader.contentView.bounds.origin
+        LongMessageReader.updateText(reader, text: long, original: false)
+        precondition(reader.contentView.bounds.origin == position)
+        print("PASS: unchanged long text preserves the reading position")
+        LongMessageReader.updateText(reader, text: "中文头部。\n" + long, original: false)
+        precondition(reader.contentView.bounds.origin.y == 0 && body.string.hasPrefix("中文头部。"))
+        print("PASS: changed long text returns to the beginning and keeps the full body")
+        for size: CGFloat in [12, 14, 16] {
+            LongMessageReader.updateText(reader, text: body.string, original: false, fontSize: size)
+            precondition(body.font?.pointSize == size && body.string.hasSuffix("COMPLETE-END"))
+        }
+        LongMessageReader.updateText(reader, text: body.string, original: true, fontSize: 16)
+        precondition(body.font?.pointSize == 12)
+        print("PASS: all three Chinese font sizes preserve the full body while originals retain their own size")
+        print("9 native editor tests passed")
     }
 }

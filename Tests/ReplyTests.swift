@@ -80,6 +80,16 @@ import Foundation
             fputs("FAIL: a paragraph wrapper must not keep the duplicated tool prefix\n", stderr); exit(1)
         }
         print("PASS: wrapped paragraph keeps reply text without the adjacent tool prefix")
+        var groupedActivity = wrappedActivity
+        groupedActivity.children[0].children.replaceSubrange(1...2, with: [
+            .init(role: "AXGroup", label: "Listed files on your computer", children: [
+                .init(role: "AXStaticText", text: "Listed files on your computer"), .init(role: "AXButton", label: "Listed files on your computer")
+            ])
+        ])
+        guard ClaudeDecoder.messages(groupedActivity).first?.text == "Keep the existing settings.\n\nNo changes were made." else {
+            fputs("FAIL: a grouped tool status must not contaminate the formal response\n", stderr); exit(1)
+        }
+        print("PASS: grouped tool activity is excluded from the formal response")
         let attachment = ReplyNode(role: "AXGroup", label: "Message 3 of 8", children: [
             .init(role: "AXGroup", children: [.init(role: "AXButton", label: "Pasted text.txt"), .init(role: "AXStaticText", text: "TXT")]),
             .init(role: "AXButton", label: "Show message actions")
@@ -118,8 +128,10 @@ import Foundation
         precondition(try! slowTracker.observe(conversation: "https://claude.ai/chat/slow", messages: old + [outgoing, final], now: 12) == nil)
         precondition(try! slowTracker.observe(conversation: "https://claude.ai/chat/slow", messages: old + [outgoing, final], now: 15)?.text == final.text)
         print("PASS: a delayed complete reply binds and emits after repeated pending reads")
-        do { _ = try ClaudeDecoder.recentMessages([attachmentHistory[3], attachmentHistory[5], attachmentHistory[6], attachmentHistory[7]]); fatalError("missing message ordinal must stop") }
-        catch { print("PASS: an ordinal gap never produces a partial snapshot") }
+        guard let visibleTail = try? ClaudeDecoder.recentMessages([attachmentHistory[3], attachmentHistory[5], attachmentHistory[6], attachmentHistory[7]]), visibleTail.map(\.ordinal) == [6, 7, 8] else {
+            fputs("FAIL: an older virtualized history gap must not block the complete latest tail\n", stderr); exit(1)
+        }
+        print("PASS: older virtualized history gaps bound the latest continuous tail")
         do { _ = try ClaudeDecoder.recentMessages([attachmentHistory[7], attachmentHistory[6]]); fatalError("reversed order must stop") }
         catch { print("PASS: out-of-order messages never produce a snapshot") }
         let long = String(repeating: "😀", count: 12_010)
@@ -179,6 +191,6 @@ import Foundation
         var gap = ReplyTracker(baseline: earlier, outbound: prompt.text, conversation: "https://claude.ai/chat/rolling")
         do { _ = try gap.observe(conversation: "https://claude.ai/chat/rolling", messages: earlier + [hugeReply], now: 0); fatalError("ordinal gap must stop") }
         catch { print("PASS: missing outbound ordinal cannot bind a different reply") }
-        print("26 reply tests passed")
+        print("27 reply tests passed")
     }
 }

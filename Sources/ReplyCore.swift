@@ -45,6 +45,21 @@ struct ReplyTranslationLifecycle {
 }
 
 enum ClaudeDecoder {
+    static func responseComplete(statusLabels: [String], controlLabels: [String], latest: ReplyNode?) -> Bool {
+        let controls = controlLabels.map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+        if controls.contains(where: { ["stop response", "stop generating", "stop"].contains($0) }) { return false }
+        let statuses = statusLabels.map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+        if statuses.contains("claude finished the response") { return true }
+        if statuses.contains(where: { ["claude is responding", "claude is thinking", "claude is working"].contains($0) }) { return false }
+        func hasFinalActions(_ node: ReplyNode) -> Bool {
+            if node.role == "AXToolbar", node.label == "Message actions" {
+                let names = node.children.map(\.label)
+                return names.contains("Copy") && (names.contains("Retry") || names.contains("Good response"))
+            }
+            return node.children.contains(where: hasFinalActions)
+        }
+        return latest.map(hasFinalActions) ?? false
+    }
     private static func ordinal(_ label: String) -> Int? {
         let parts = label.split(separator: " ")
         guard parts.count == 4, parts[0] == "Message", parts[2] == "of", Int(parts[3]) != nil else { return nil }
@@ -87,7 +102,7 @@ enum ClaudeDecoder {
                 // Ignore sibling tool activity, duplicated status text, and message actions.
                 let controlGroups = parent.children.filter { hasControls($0) }
                 func allText(_ node: ReplyNode) -> [String] {
-                    (node.role == "AXStaticText" ? [node.text.isEmpty ? node.label : node.text] : []) + node.children.flatMap(allText)
+                    (["AXStaticText", "AXButton"].contains(node.role) ? [node.text.isEmpty ? node.label : node.text] : []) + node.children.flatMap(allText)
                 }
                 let statusText = Set(controlGroups.flatMap(allText) + controlGroups.filter { $0.role == "AXButton" }.map(\.label))
                 let body = parent.children.enumerated().compactMap { index, child -> String? in
@@ -97,11 +112,12 @@ enum ClaudeDecoder {
                     // then a text node with the same status prefixed to the answer.
                     if index > 0 {
                         let previous = parent.children[index - 1]
-                        if previous.role == "AXButton", hasControls(previous), !previous.label.isEmpty,
-                           value.hasPrefix(previous.label) {
-                            let remainder = value.dropFirst(previous.label.count)
-                            if remainder.first?.isWhitespace == true {
-                                value = String(remainder.drop(while: \.isWhitespace))
+                        if ["AXButton", "AXGroup"].contains(previous.role), hasControls(previous) {
+                            for prefix in Set(allText(previous)).filter({ !$0.isEmpty }).sorted(by: { $0.count > $1.count }) where value.hasPrefix(prefix) {
+                                let remainder = value.dropFirst(prefix.count)
+                                if remainder.first?.isWhitespace == true {
+                                    value = String(remainder.drop(while: \.isWhitespace)); break
+                                }
                             }
                         }
                     }
@@ -131,17 +147,20 @@ enum ClaudeDecoder {
         }
         guard let last = positions.last, last.ordinal == last.total,
               positions.allSatisfy({ $0.total == last.total }),
-              zip(positions, positions.dropFirst()).allSatisfy({ $1.ordinal == $0.ordinal + 1 }) else {
+              zip(positions, positions.dropFirst()).allSatisfy({ $1.ordinal > $0.ordinal }) else {
             throw ReplyReadPending(message: "Claude 消息区正在更新，本次读取已丢弃。")
         }
         var tail: [ChatMessage] = []
-        for node in nodes.reversed() {
+        var expected = last.ordinal
+        for (node, position) in zip(nodes, positions).reversed() {
+            guard position.ordinal == expected else { break }
             let decoded = messages(node)
             // Historical attachment-only cards have no author/body marker.
             // Stop at that boundary; never guess its author or skip a gap in
             // the current turn. The latest message must itself be complete.
             guard decoded.count == 1 else { break }
             tail.append(decoded[0])
+            expected -= 1
         }
         guard !tail.isEmpty else {
             throw ReplyReadPending(message: "最新消息的正文或作者标记尚未完整，未使用部分内容。")

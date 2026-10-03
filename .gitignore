@@ -2,3 +2,15 @@
 dist/
 .DS_Store
 HANDOFF.md
+
+# Local credentials and account storage must never be uploaded.
+.env
+.env.*
+Cookies
+Cookies-*
+*.sqlite
+*.sqlite-*
+*.db
+*.p12
+*.key
+signing.json

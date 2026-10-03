@@ -4,11 +4,14 @@ import AppKit
 @main struct ModelTests {
     @MainActor static func main() async throws {
         _ = NSApplication.shared
-        let settings = ["targetLanguage", "engine", "baseURL", "aiModel"].map { ($0, UserDefaults.standard.object(forKey: $0)) }
+        let settings = ["targetLanguage", "replyTextSize", "engine", "baseURL", "aiModel"].map { ($0, UserDefaults.standard.object(forKey: $0)) }
         defer { for (key, value) in settings { UserDefaults.standard.set(value, forKey: key) } }
         UserDefaults.standard.set("en", forKey: "targetLanguage")
+        UserDefaults.standard.removeObject(forKey: "replyTextSize")
         let model = TranslatorModel(permissionCheck: { true }, applePreparationTimeout: .milliseconds(20))
         defer { model.cancel(); model.stopPermissionMonitoring() }
+        precondition(model.replyTextSize == .medium && model.replyTextSize.rawValue == 14)
+        model.replyTextSize = .large
         model.engine = "apple"
         model.input = "保留中文草稿"
         model.history = [.init(id: "old", isUser: false, chinese: "中文回复", foreign: "Existing reply.", language: .english)]
@@ -43,8 +46,8 @@ import AppKit
         print("PASS: shortening the draft clears the limit warning")
         model.replies.watching = true
         try model.saveSettings(key: "", replaceKey: false)
-        precondition(!model.replies.watching)
-        print("PASS: saving translation settings retires the old provider binding before future requests")
+        precondition(model.replies.watching)
+        print("PASS: saving translation settings preserves continuous reading and retires old translation jobs")
         var observed = 0
         model.replies.onReplyObserved = { observed += 1 }
         let large = ReplyCandidate(ordinal: 2, text: String(repeating: "A", count: 50_001))
@@ -59,9 +62,11 @@ import AppKit
         let raw = "Run after saving:\n\nprintf 'KEEP_SETTINGS'\n\nComplete ending."
         model.recordReplyOriginal(id: "reply", foreign: raw, language: .english)
         precondition(model.history.count == 1 && model.history[0].foreign == raw && model.history[0].chinese.isEmpty)
+        precondition(model.chatScrollTarget == "reply" && model.chatScrollAtTop)
         print("PASS: a complete original reply is visible before Chinese translation starts")
         model.recordReply(id: "reply", foreign: raw, chinese: "保存后运行。", language: .english)
         precondition(model.history.count == 1 && model.history[0].foreign == raw && model.history[0].chinese == "保存后运行。")
+        precondition(model.chatScrollTarget == "reply" && model.chatScrollAtTop)
         model.recordReplyOriginal(id: "reply", foreign: raw, language: .english)
         precondition(model.history.count == 1 && model.history[0].chinese == "保存后运行。")
         print("PASS: successful translation updates the same bubble; identical originals do not erase it")
@@ -78,6 +83,27 @@ import AppKit
         precondition(!model.replies.watching && model.replies.status.contains("切换会话"))
         precondition(model.history[0].foreign.hasSuffix("New ending."))
         print("PASS: persistent unsafe reads still stop monitoring and preserve acquired originals")
-        print("13 multilingual model tests passed")
+        model.replies.watching = true
+        model.cancel()
+        precondition(model.replies.watching, "Cancelling Chinese input must not stop continuous Claude reading")
+        model.clearHistory()
+        precondition(model.replies.watching && model.chatScrollTarget == "bottom" && !model.chatScrollAtTop)
+        print("PASS: cancelling a send and clearing local chat preserve continuous reading")
+        for number in 1...12 {
+            model.recordReply(id: "saved-\(number)", foreign: "Reply \(number)", chinese: "译文 \(number)", language: .english)
+        }
+        precondition(model.history.filter { !$0.isUser && !$0.chinese.isEmpty }.count == 10)
+        precondition(model.history.first?.id == "saved-3" && model.history.last?.id == "saved-12")
+        model.recordReply(id: "saved-3", foreign: "Reply 3", chinese: "再次翻译", language: .english)
+        precondition(model.history.count == 10 && model.history.last?.id == "saved-3")
+        model.input = "清除记录时保留草稿"
+        model.clearHistory()
+        precondition(model.history.isEmpty && model.replies.watching && model.input == "清除记录时保留草稿")
+        print("PASS: only the latest ten completed reply translations are retained; clear preserves reading and drafts")
+        let fresh = TranslatorModel(permissionCheck: { true })
+        precondition(fresh.history.isEmpty && fresh.language == .german && fresh.replyTextSize == .large)
+        fresh.stopPermissionMonitoring()
+        print("PASS: a new application restores language and font size but has no persisted chat records")
+        print("16 multilingual model tests passed")
     }
 }

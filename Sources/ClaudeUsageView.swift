@@ -2,11 +2,13 @@ import SwiftUI
 
 struct ClaudeUsageView: View {
     @ObservedObject var usage: ClaudeUsageMonitor
+    let settingsDisabled: Bool
+    let openSettings: () -> Void
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let stale = usage.stale || usage.snapshot?.isStale(at: context.date) == true
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Text("Claude · " + (usage.source == .desktop ? "桌面" : "session") + " · " + usage.plan.rawValue + " · 已用")
                         .font(.system(size: 10, weight: .medium)).lineLimit(1)
                     if stale { Text("旧数据").font(.system(size: 9)).foregroundStyle(.orange) }
@@ -15,7 +17,10 @@ struct ClaudeUsageView: View {
                         .buttonStyle(.plain).disabled(usage.refreshing || usage.organization.isEmpty).accessibilityLabel("刷新 Claude 额度")
                     Button { usage.showConnection = true } label: { Image(systemName: "ellipsis.circle") }
                         .buttonStyle(.plain).accessibilityLabel("连接 Claude 额度")
+                    Button(action: openSettings) { Image(systemName: "gearshape") }
+                        .buttonStyle(.plain).disabled(settingsDisabled).accessibilityLabel("翻译设置")
                 }
+                .foregroundStyle(.secondary)
                 if usage.snapshot != nil {
                     row("5小时", window: usage.snapshot?.fiveHour, now: context.date)
                     row("每周", window: usage.snapshot?.sevenDay, now: context.date)
@@ -24,17 +29,22 @@ struct ClaudeUsageView: View {
                         .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
                     Text(usage.status).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
                 }
-            }.frame(width: 235, alignment: .leading).help(details(stale: stale))
+            }.frame(minWidth: 275, maxWidth: .infinity, alignment: .leading).help(details(stale: stale))
         }
     }
     private func row(_ label: String, window: ClaudeUsageWindow?, now: Date) -> some View {
         HStack(spacing: 5) {
-            Text(label).frame(width: 34, alignment: .leading).foregroundStyle(.secondary)
+            Text(label).frame(width: 30, alignment: .leading).foregroundStyle(.secondary)
             if let window {
+                ProgressView(value: window.usedPercentage, total: 100)
+                    .progressViewStyle(.linear)
+                    .tint(window.usedPercentage >= 90 ? .orange : .accentColor)
+                    .frame(minWidth: 36, maxWidth: .infinity)
+                    .accessibilityHidden(true)
                 Text(window.usedPercentage.formatted(.number.precision(.fractionLength(0...1))) + "%")
-                    .monospacedDigit().frame(width: 42, alignment: .trailing)
+                    .monospacedDigit().frame(width: 33, alignment: .trailing)
                     .foregroundStyle(window.usedPercentage >= 90 ? .orange : .primary)
-                Text(reset(window, now: now)).foregroundStyle(.secondary).lineLimit(1)
+                Text(reset(window, now: now)).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).fixedSize(horizontal: true, vertical: false)
             } else { Text("未提供").foregroundStyle(.secondary) }
         }.font(.system(size: 10)).accessibilityElement(children: .combine)
     }

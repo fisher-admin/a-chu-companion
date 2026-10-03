@@ -13,7 +13,12 @@ final class TranslatorModel: ObservableObject {
         var language: TranslationLanguage = .english
     }
     @Published var history: [ChatItem] = []
+    @Published var replyTextSize = ReplyTextSize(rawValue: UserDefaults.standard.integer(forKey: "replyTextSize")) ?? .medium {
+        didSet { UserDefaults.standard.set(replyTextSize.rawValue, forKey: "replyTextSize") }
+    }
     @Published private(set) var chatRevision = 0
+    @Published private(set) var chatScrollTarget = "bottom"
+    @Published private(set) var chatScrollAtTop = false
     func recordReplyOriginal(id: String, foreign: String, language: TranslationLanguage) {
         if let i = history.firstIndex(where: { $0.id == id }) {
             if history[i].foreign != foreign { history[i].chinese = "" }
@@ -21,16 +26,34 @@ final class TranslatorModel: ObservableObject {
         } else {
             history.append(.init(id: id, isUser: false, chinese: "", foreign: foreign, language: language))
         }
-        if history.count > 40 { history.removeFirst(history.count - 40) }
+        trimHistory()
+        chatScrollTarget = id; chatScrollAtTop = true
         chatRevision += 1
     }
     func recordReply(id: String, foreign: String, chinese: String, language: TranslationLanguage) {
-        if let i = history.firstIndex(where: { $0.id == id }) { history[i].foreign = foreign; history[i].chinese = chinese; history[i].language = language }
-        else { history.append(.init(id: id, isUser: false, chinese: chinese, foreign: foreign, language: language)) }
-        if history.count > 40 { history.removeFirst(history.count - 40) }
+        history.removeAll { $0.id == id }
+        history.append(.init(id: id, isUser: false, chinese: chinese, foreign: foreign, language: language))
+        trimHistory()
+        chatScrollTarget = id; chatScrollAtTop = true
         chatRevision += 1
     }
-    func clearHistory() { history = []; input = ""; output = ""; replies.stop(clear: true); chatRevision += 1 }
+    private func trimHistory() {
+        let completed = history.filter { !$0.isUser && !$0.chinese.isEmpty }
+        let removed = Set(completed.dropLast(10).map(\.id))
+        history.removeAll { removed.contains($0.id) }
+        // Bound drafts and untranslated replies too, without counting them as translations.
+        let unfinished = history.filter { $0.isUser || $0.chinese.isEmpty }
+        let extras = Set(unfinished.dropLast(20).map(\.id))
+        history.removeAll { extras.contains($0.id) }
+    }
+    func clearHistory() {
+        replies.clearRecords()
+        history = []; chatScrollTarget = "bottom"; chatScrollAtTop = false; chatRevision += 1
+    }
+    func readVisibleReply() {
+        guard let target else { return }
+        Task { await replies.readVisible(target: target, engine: engine, baseURL: baseURL, model: aiModel, language: language) }
+    }
     @Published var input = "" {
         didSet {
             if input != oldValue && !busy {
@@ -45,7 +68,8 @@ final class TranslatorModel: ObservableObject {
         didSet {
             guard language != oldValue else { return }
             UserDefaults.standard.set(language.rawValue, forKey: "targetLanguage")
-            output = ""; configuration = nil; replies.stop()
+            output = ""; configuration = nil
+            replies.configure(engine: engine, baseURL: baseURL, model: aiModel, language: language)
             report("已选择\(language.name)，Claude 的回复将译回中文。")
         }
     }
@@ -118,6 +142,7 @@ final class TranslatorModel: ObservableObject {
             hasTarget = true
             status = "\(language.name)译文将填入 \(targetName) 的原输入框。"
             isError = false
+            startReplyReading()
         } catch {
             target = nil; hasTarget = false; targetName = "未选择输入框"
             status = error.localizedDescription; isError = false
@@ -132,7 +157,7 @@ final class TranslatorModel: ObservableObject {
         UserDefaults.standard.set(engine, forKey: "engine")
         UserDefaults.standard.set(baseURL, forKey: "baseURL")
         UserDefaults.standard.set(aiModel, forKey: "aiModel")
-        replies.stop()
+        replies.configure(engine: engine, baseURL: baseURL, model: aiModel, language: language)
         report("翻译设置已保存，下一次发送或读取将使用新设置。")
     }
     func begin(insert: Bool) {
@@ -148,7 +173,8 @@ final class TranslatorModel: ObservableObject {
             if useAI { _ = try AIProtocol.request(text: "测试", baseURL: base, model: model, key: key, direction: .fromChinese(job.language)) }
             activeID = job.id; pending = job; busy = true; output = ""
             history.append(.init(id: job.id.uuidString, isUser: true, chinese: text, foreign: "", language: job.language))
-            if history.count > 40 { history.removeFirst(history.count - 40) }
+            trimHistory()
+            chatScrollTarget = "bottom"; chatScrollAtTop = false
             chatRevision += 1
             report(engine == "apple" ? "正在使用系统翻译… 首次使用可能需要下载语言包。" : "正在翻译…")
             if useAI {
@@ -198,8 +224,6 @@ final class TranslatorModel: ObservableObject {
         chatRevision += 1
         if job.insert, let target = job.target {
             report("翻译完成，正在检查原输入框…")
-            await replies.arm(target: target, outbound: translated, engine: engine, baseURL: baseURL, model: aiModel, language: job.language)
-            guard activeID == job.id, !Task.isCancelled else { return }
             let outcome = try await TargetBridge.deliver(translated, to: target, autoSend: job.send,
                                                         commandReturn: job.commandReturn)
             guard activeID == job.id else { return }
@@ -214,7 +238,6 @@ final class TranslatorModel: ObservableObject {
                 report("已尝试粘贴，但目标软件未提供可核对的文字。没有自动发送，请检查输入框。", error: true)
                 revealWindow()
             }
-            replies.startPolling()
             // A captured caret is single-use; a later action must capture a fresh target.
             self.target = target
             hasTarget = true
@@ -242,7 +265,6 @@ final class TranslatorModel: ObservableObject {
         if #available(macOS 26.0, *) { appleSession?.cancel() }
         busy = false; pending = nil; activeID = nil; appleSession = nil
         configuration = nil
-        replies.stop()
         if error is CancellationError { report("已取消，中文内容已保留。") }
         else {
             report(error.localizedDescription + (output.isEmpty ? "" : " 译文已保留，可复制使用。"), error: true)
@@ -250,16 +272,15 @@ final class TranslatorModel: ObservableObject {
         }
     }
     func cancel() {
-        replies.stop()
         preparationWatchdog?.cancel(); preparationWatchdog = nil
         activeID = nil; pending = nil; task?.cancel(); task = nil
         if #available(macOS 26.0, *) { appleSession?.cancel() }
         appleSession = nil; configuration = nil; busy = false
         report("已取消。若已开始粘贴，请检查原输入框。")
     }
-    func readCurrentReply() {
+    func startReplyReading() {
         guard !busy, let target else { report("请先点击 Claude 输入框，再按 ⌃⌥E。", error: true); return }
-        Task { await replies.followExisting(target: target, engine: engine, baseURL: baseURL, model: aiModel, language: language) }
+        Task { await replies.connect(target: target, engine: engine, baseURL: baseURL, model: aiModel, language: language) }
     }
     func copyOutput() {
         guard !output.isEmpty else { return }

@@ -90,7 +90,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func openSettings() { show(capture: false); model.showSettings = true }
     @objc func quitApp() { model.cancel(); NSApp.terminate(nil) }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        model.replies.stop(clear: true)
         if model.busy { model.cancel() }
         sender.orderOut(nil)
         return false
@@ -98,7 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         show(capture: false); return true
     }
-    func applicationWillTerminate(_ notification: Notification) { model.stopPermissionMonitoring(); usage.stop() }
+    func applicationWillTerminate(_ notification: Notification) { model.replies.stop(); model.stopPermissionMonitoring(); usage.stop() }
 }
 
 @main struct AChuCompanionApp {
