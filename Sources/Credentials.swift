@@ -4,7 +4,7 @@ import Security
 enum Credentials {
     private static let query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: "local.yiqiao.translator",
+        kSecAttrService as String: "local.achu.companion",
         kSecAttrAccount as String: "translation-api-key"
     ]
     static func read() throws -> String {

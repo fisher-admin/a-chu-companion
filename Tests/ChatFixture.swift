@@ -15,12 +15,12 @@ import WebKit
         window.contentView = web
         let htmlPath = Bundle.main.path(forResource: "fixture", ofType: "html")!
         let html = try! String(contentsOfFile: htmlPath, encoding: .utf8)
-        web.loadHTMLString(html, baseURL: URL(string: "https://claude.ai/chat/yiqiao-local-fixture"))
+        web.loadHTMLString(html, baseURL: URL(string: "https://claude.ai/chat/achu-local-fixture"))
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard JSONSerialization.isValidJSONObject(message.body), let data = try? JSONSerialization.data(withJSONObject: message.body, options: .prettyPrinted) else { return }
-        try? data.write(to: URL(fileURLWithPath: "/private/tmp/yiqiao-fixture.json"), options: .atomic)
+        try? data.write(to: URL(fileURLWithPath: "/private/tmp/achu-fixture.json"), options: .atomic)
     }
 }
 @main struct Main {

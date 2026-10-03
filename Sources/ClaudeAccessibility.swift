@@ -24,7 +24,7 @@ final class ClaudeSource: @unchecked Sendable {
         return (value as! AXUIElement)
     }
     static func bind(pid: pid_t, bundle: String, composer: AXUIElement, window: AXUIElement, name: String) throws -> ClaudeSource {
-        let fixture = bundle == "local.yiqiao.fixture"
+        let fixture = bundle == "local.achu.fixture"
         guard fixture || ["com.anthropic.claudefordesktop", "com.google.Chrome", "com.apple.Safari", "com.microsoft.edgemac", "com.brave.Browser"].contains(bundle) else {
             throw BridgeError.message("自动回复翻译目前只适配 Claude 桌面版及浏览器中的 claude.ai。")
         }

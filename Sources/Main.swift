@@ -48,13 +48,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return noErr
         }, 1, &spec, nil, &eventHandler)
         let status = RegisterEventHotKey(UInt32(kVK_ANSI_E), UInt32(controlKey | optionKey),
-                                        EventHotKeyID(signature: 0x59514252, id: 1), GetApplicationEventTarget(), 0, &hotKey)
+                                        EventHotKeyID(signature: 0x41434855, id: 1), GetApplicationEventTarget(), 0, &hotKey)
         show(capture: false)
         if status != noErr { model.report("⌃⌥E 已被其他软件占用，请使用菜单栏打开A畜伴侣。", error: true) }
     }
     func show(capture: Bool) {
         if capture { model.prepareTarget() }
-        model.permission = TargetBridge.trusted
+        model.refreshPermission()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         DispatchQueue.main.async { [weak self] in
@@ -86,9 +86,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         show(capture: false); return true
     }
+    func applicationWillTerminate(_ notification: Notification) { model.stopPermissionMonitoring() }
 }
 
-@main struct YiqiaoApp {
+@main struct AChuCompanionApp {
     @MainActor static func main() {
         let app = NSApplication.shared
         let delegate = AppDelegate()

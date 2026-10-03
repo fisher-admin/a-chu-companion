@@ -25,7 +25,7 @@ final class TranslatorModel: ObservableObject {
     @Published var isError = false
     @Published var targetName = "未选择输入框"
     @Published var hasTarget = false
-    @Published var permission = TargetBridge.trusted
+    @Published private(set) var permission: Bool
     @Published var configuration: TranslationSession.Configuration?
     @Published var showSettings = false
     @Published var engine = UserDefaults.standard.string(forKey: "engine") ?? "apple"
@@ -39,6 +39,7 @@ final class TranslatorModel: ObservableObject {
     }
     var hideWindow: () -> Void = {}
     var revealWindow: () -> Void = {}
+    private let permissionMonitor: AccessibilityPermissionMonitor
     private var target: TargetBridge.Target?
     private var task: Task<Void, Never>?
     private var appleSession: TranslationSession?
@@ -53,9 +54,30 @@ final class TranslatorModel: ObservableObject {
         let commandReturn: Bool
     }
 
+    init(permissionCheck: @escaping @MainActor () -> Bool = { TargetBridge.trusted },
+         permissionInterval: UInt64 = 1_000_000_000) {
+        permission = permissionCheck()
+        permissionMonitor = AccessibilityPermissionMonitor(check: permissionCheck, interval: permissionInterval)
+        permissionMonitor.onChange = { [weak self] granted in
+            guard let self, self.permission != granted else { return }
+            self.permission = granted
+            if granted && !self.busy && !self.hasTarget {
+                self.report("辅助功能已开启。请点击 Claude 输入框，再按 ⌃⌥E 连接。")
+            }
+        }
+        permissionMonitor.start()
+    }
+
+    func refreshPermission() { permissionMonitor.refresh() }
+    func requestPermission() {
+        TargetBridge.requestPermission()
+        refreshPermission()
+    }
+    func stopPermissionMonitoring() { permissionMonitor.stop() }
+
     func prepareTarget() {
         guard !busy else { return }
-        permission = TargetBridge.trusted
+        refreshPermission()
         do {
             target = try TargetBridge.capture()
             targetName = target!.name

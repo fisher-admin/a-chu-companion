@@ -34,7 +34,7 @@ struct MainView: View {
                     Image(systemName: "hand.raised")
                     Text("连接 Claude 需要辅助功能权限").font(.system(size: 12))
                     Spacer()
-                    Button("前往开启") { TargetBridge.requestPermission() }.controlSize(.small)
+                    Button("前往开启") { model.requestPermission() }.controlSize(.small)
                 }.padding(12).background(Color.orange.opacity(0.09))
             }
             ScrollViewReader { proxy in
@@ -119,7 +119,7 @@ struct MainView: View {
             .translationTask(model.configuration) { session in await model.runApple(session) }
             .translationTask(replies.reverseConfiguration) { session in await replies.runSystemReply(session) }
             .sheet(isPresented: $model.showSettings) { SettingsView(model: model) }
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.permission = TargetBridge.trusted }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.refreshPermission() }
     }
 }
 
