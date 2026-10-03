@@ -14,3 +14,9 @@ Cookies-*
 *.p12
 *.key
 signing.json
+*.pem
+*.pfx
+*.mobileprovision
+.venv/
+__pycache__/
+*.py[cod]

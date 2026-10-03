@@ -1,0 +1,57 @@
+name: CI
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository:
+    name: Repository checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify repository tooling
+        run: python3 -m unittest discover -s Tests -p RepositoryChecksTests.py
+      - name: Validate documentation and audit history
+        run: python3 Tools/check_repository.py --history
+  macos:
+    name: macOS tests and build
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: |
+          sw_vers
+          swiftc --version
+          python3 --version
+      - name: Offline regression checks
+        run: ./test.sh
+      - name: Local HTTP integration checks
+        run: ./test-http.sh
+      - name: Build without local credentials or signing identity
+        env:
+          ACHU_SIGNING_CONFIG: /tmp/achu-ci-no-signing-config.json
+        run: ./build.sh --unsigned
+      - name: Validate verification bundle
+        run: |
+          app="dist/unsigned/A畜伴侣.app"
+          plutil -lint "$app/Contents/Info.plist"
+          test -s "$app/Contents/Resources/AChuCompanion.icns"
+          file "$app/Contents/MacOS/AChuCompanion"
+          test ! -e "dist/A畜伴侣.app"

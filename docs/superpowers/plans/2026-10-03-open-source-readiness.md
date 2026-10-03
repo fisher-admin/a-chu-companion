@@ -1,0 +1,28 @@
+# 正式开源准备实施计划
+
+Goal: 保留现有完整历史，以 MIT 许可公开 A畜伴侣，并补齐可验证的开源项目配置。
+
+用户已明确要求正式开源、选择 MIT，并要求保留版本更新历史。本任务在当前仓库按步骤实施，不改写旧提交、不删除旧版测试记录、不改动已安装程序或其授权。
+
+## 交付与完成标准
+
+- [x] 双语 README、MIT LICENSE、CHANGELOG、CONTRIBUTING、CODE_OF_CONDUCT、SECURITY、SUPPORT、隐私及发布说明齐全；旧 README 内容完整归档（仅调整迁移后的图片路径）。
+- [x] 问题表单、PR 模板、CODEOWNERS、Dependabot 和发布说明分类配置有效。
+- [ ] 无本机证书／会话／语言包的 CI 可完成仓库检查、157 项离线检查、7 项本机 HTTP 检查及应用构建；默认签名安装不改变。
+- [x] 全部现有历史与待上传文件完成凭据检查，检查日志不输出密钥。
+- [ ] GitHub 仓库公开，描述／topics／社区入口／只读 Actions／私密漏洞报告／密钥保护／主分支保护核对。
+- [ ] GitHub 实际 CI 通过，版本标签和源码发布与已验证提交一致，历史仍可追溯。
+
+## 实施步骤
+
+1. 保存原 README 到 docs/DEVELOPMENT_HISTORY.zh-CN.md，重写双语首页；补齐社区、隐私及维护文档。保留 TEST_PLAN 和旧计划。
+2. 新增 python3 Tools/check_repository.py 和有代表性的失败／成功检查；验证 Markdown 文件链接、必需文件及明确凭据模式，全历史检查使用 --history。
+3. build.sh 增加显式 --unsigned，只输出 dist/unsigned；默认继续固定签名。验证参数失败、无钥匙串构建、包内图标／元数据和原签名拒绝临时包。
+4. CI 使用官方 macos-26 runner、固定 SHA 的官方 action、只读 token；不访问真实 Claude、钥匙串或安装语言包。定期 Dependabot 更新固定版本。
+5. 本机运行仓库检查、./test.sh、./test-http.sh、unsigned 构建和 YAML 校验；核对正式已安装程序签名及不被替换。
+6. 推送准备提交，核对公开前审计；公开仓库并设置社区／安全入口，确认 hosted CI 通过后设置 main 保护。
+7. 记录 1.1.4 的源码发布，不发布本机签名或未公证二进制；核对 release/tag/source commit，保存配置验收记录。
+
+## 本机验证记录
+
+2026-10-03：157 项应用回归、7 项本机 HTTP、5 项仓库工具检查通过；YAML 解析及 actionlint 1.7.12 通过。无签名构建在 macOS 正常执行环境通过，应用版本 1.1.4 build28、arm64 与图标齐全；受限工具环境 iconutil 无法打包，因此使用正常系统执行环境复核。原 dist 签名包及已安装程序字节未改变，签名仍严格有效；临时包不能匹配原授权身份。原 README 内容与 Git 中旧文件一致，仅图片路径适应新位置。当前工作区及此前全部 172 个历史文件版本未发现真实凭据模式。GitHub 实际配置、CI 与发布待核对。

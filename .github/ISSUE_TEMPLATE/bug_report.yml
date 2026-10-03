@@ -1,0 +1,65 @@
+name: Bug report / 问题报告
+description: Report a reproducible problem using sanitized details. / 提供可复现且已去除私人信息的问题。
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include session keys, cookies, API keys, real conversation URLs, or private chat screenshots. / 不要提交 session、Cookie、API 密钥、真实会话链接或私人对话截图。
+  - type: input
+    id: version
+    attributes:
+      label: App version / 伴侣版本
+      description: Include version and build number. / 包括版本及构建号。
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: macOS version and Mac chip / 系统版本与芯片
+    validations:
+      required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: Claude client / Claude 客户端
+      options:
+        - Claude Desktop / 桌面版
+        - Claude in Chrome / Chrome 网页版
+        - Another browser / 其他浏览器
+        - Local fixture or translation only / 本机模拟或仅翻译
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Translation engine / 翻译方式
+      options:
+        - macOS system translation / 系统翻译
+        - Configured AI service / 配置的 AI 服务
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce / 复现步骤
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior / 预期与实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence / 已脱敏的证据
+      description: Use synthetic text and crop private information. / 使用模拟内容，遮去私人信息。
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check / 隐私确认
+      options:
+        - label: I removed credentials and private conversation content. / 已移除凭据和私人对话。
+          required: true

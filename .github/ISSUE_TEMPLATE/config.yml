@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report / 私密安全报告
+    url: https://github.com/fisher-admin/a-chu-companion/security/advisories/new
+    about: Report vulnerabilities privately. Never post session keys or chat content. / 私密报告漏洞，不要公开凭据或聊天内容。
+  - name: Usage and troubleshooting / 使用和故障排查
+    url: https://github.com/fisher-admin/a-chu-companion/blob/main/SUPPORT.md
+    about: Check supported platforms, permissions, and known limitations. / 先核对系统、权限及已知限制。

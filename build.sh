@@ -1,7 +1,13 @@
 #!/bin/zsh
 set -euo pipefail
 cd "${0:A:h}"
-./sign-app.sh --check
+unsigned_build=false
+case "${1:-}" in
+  "") [[ $# == 0 ]] || { print -u2 'Usage: ./build.sh [--unsigned]'; exit 2; } ;;
+  --unsigned) [[ $# == 1 ]] || { print -u2 'Usage: ./build.sh [--unsigned]'; exit 2; }; unsigned_build=true ;;
+  *) print -u2 'Usage: ./build.sh [--unsigned]'; exit 2 ;;
+esac
+if ! $unsigned_build; then ./sign-app.sh --check; fi
 mkdir -p .build/cache dist
 staging=$(mktemp -d "$PWD/.build/package.XXXXXX")
 trap 'rm -rf "$staging"' EXIT
@@ -30,9 +36,19 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>NSAccessibilityUsageDescription</key><string>将译文填入你选定的软件输入框，并按你的设置触发发送和读取 Claude 回复。</string>
 </dict></plist>
 PLIST
-./sign-app.sh "$app"
-codesign --verify --strict "$app"
+if ! $unsigned_build; then
+  ./sign-app.sh "$app"
+  codesign --verify --strict "$app"
+fi
 plutil -lint "$app/Contents/Info.plist"
-rm -rf "dist/A畜伴侣.app"
-mv "$app" "dist/A畜伴侣.app"
-printf 'Built: %s/dist/A畜伴侣.app\n' "$PWD"
+destination="dist/A畜伴侣.app"
+if $unsigned_build; then
+  mkdir -p dist/unsigned
+  destination="dist/unsigned/A畜伴侣.app"
+fi
+rm -rf "$destination"
+mv "$app" "$destination"
+printf 'Built: %s/%s\n' "$PWD" "$destination"
+if $unsigned_build; then
+  print 'Verification build only: no local signing identity, no installation, no Apple notarization.'
+fi
