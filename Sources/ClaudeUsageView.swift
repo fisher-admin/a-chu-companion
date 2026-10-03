@@ -7,7 +7,8 @@ struct ClaudeUsageView: View {
             let stale = usage.stale || usage.snapshot?.isStale(at: context.date) == true
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 5) {
-                    Text("Claude · " + usage.plan.rawValue + " · 已用").font(.system(size: 10, weight: .medium))
+                    Text("Claude · " + (usage.source == .desktop ? "桌面" : "session") + " · " + usage.plan.rawValue + " · 已用")
+                        .font(.system(size: 10, weight: .medium)).lineLimit(1)
                     if stale { Text("旧数据").font(.system(size: 9)).foregroundStyle(.orange) }
                     Spacer(minLength: 0)
                     Button { usage.refresh() } label: { Image(systemName: "arrow.clockwise") }
@@ -40,7 +41,7 @@ struct ClaudeUsageView: View {
     private func reset(_ window: ClaudeUsageWindow, now: Date) -> String {
         guard let date = window.resetsAt else { return "暂无重置时间" }
         if date <= now { return "已到重置时间，待刷新" }
-        return date.formatted(.dateTime.month(.twoDigits).day(.twoDigits).hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)) + " 重置"
+        return ClaudeUsageDisplay.resetTime(date) + " 重置"
     }
     private func details(stale: Bool) -> String {
         var text = "\(usage.status)\n百分比为已使用比例。时间按本机时区显示。\n额度来源：\(usage.source.name)"
@@ -60,11 +61,12 @@ struct ClaudeUsageConnectionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("连接 Claude 额度").font(.title2.bold())
+            Text("当前来源：" + usage.source.name).font(.system(size: 12, weight: .medium))
             Text("优先使用 Claude 桌面端当前登录的账户。读取五小时和每周额度、重置时间及套餐，不打开网页，也不发送聊天消息。")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
             Button("读取 Claude 桌面登录") { usage.connectDesktop() }
                 .buttonStyle(.borderedProminent).disabled(usage.refreshing)
-            Text("首次连接可能出现 macOS 钥匙串提示，用于读取 Claude 已保存的登录会话。自动刷新不会反复弹出授权。请确认桌面端和你聊天使用的是同一个账户。")
+            Text("首次连接可能出现 macOS 钥匙串提示，用于读取 Claude 已保存的登录会话。自动刷新不会反复弹出授权。网页版如果使用其他账户，请连接对应账户的 session；这里不会自动认定不同客户端的账户相同。")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             Divider()
             Text("或使用已有 session").font(.headline)

@@ -15,16 +15,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         Self.shared = self
         AppMenus.install()
         NSApp.setActivationPolicy(.accessory)
-        window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 670, height: 780),
-                          styleMask: [.titled, .closable, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
+        window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 610, height: 780),
+                          styleMask: [.titled, .closable, .resizable, .nonactivatingPanel, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "A畜伴侣 · Claude 双向翻译"
         window.isOpaque = false
         window.backgroundColor = .clear
         window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none
         NSApp.applicationIconImage = CompanionIcon.image(size: 256)
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 630, height: 710)
+        window.minSize = NSSize(width: 610, height: 710)
         window.delegate = self
         window.contentView = NSHostingView(rootView: MainView(model: model, usage: usage))
         window.center()

@@ -21,6 +21,18 @@ struct ClaudeUsageWindow: Equatable, Sendable {
     let resetsAt: Date?
 }
 
+enum ClaudeUsageDisplay {
+    static func resetTime(_ date: Date, timeZone: TimeZone = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "MM/dd HH:mm"
+        let minute = Date(timeIntervalSince1970: (date.timeIntervalSince1970 / 60).rounded() * 60)
+        return formatter.string(from: minute)
+    }
+}
+
 struct ClaudeUsageSnapshot: Equatable, Sendable {
     let fiveHour: ClaudeUsageWindow?
     let sevenDay: ClaudeUsageWindow?

@@ -38,6 +38,18 @@ import Foundation
         }
         do { _ = try ClaudeUsageRequest.make(sessionKey: "sk-ant-sid01-testonlyabcdefghijklmnop", organization: "../billing"); preconditionFailure() } catch {}
         print("PASS: only the verified read-only endpoint receives a valid session credential")
-        print("6 usage tests passed")
+        let resetDate = ISO8601DateFormatter().date(from: "2026-10-09T21:00:00Z")!
+        precondition(ClaudeUsageDisplay.resetTime(resetDate, timeZone: TimeZone(identifier: "America/Los_Angeles")!) == "10/09 14:00")
+        precondition(ClaudeUsageDisplay.resetTime(resetDate, timeZone: TimeZone(secondsFromGMT: 0)!) == "10/09 21:00")
+        precondition(ClaudeUsageDisplay.resetTime(resetDate, timeZone: TimeZone(identifier: "Asia/Shanghai")!) == "10/10 05:00")
+        print("PASS: reset times use an explicit 24-hour clock and the correct local date")
+        let boundary = try ClaudeUsageSnapshot.decode(Data("{\"seven_day\":{\"utilization\":13,\"resets_at\":\"2026-10-09T20:59:59.851728+00:00\"}}".utf8), at: now).sevenDay!.resetsAt!
+        precondition(ClaudeUsageDisplay.resetTime(boundary, timeZone: TimeZone(identifier: "America/Los_Angeles")!) == "10/09 14:00")
+        precondition(ClaudeUsageDisplay.resetTime(resetDate.addingTimeInterval(-35), timeZone: TimeZone(identifier: "America/Los_Angeles")!) == "10/09 13:59")
+        let midnight = ISO8601DateFormatter().date(from: "2026-10-09T23:59:40Z")!
+        precondition(ClaudeUsageDisplay.resetTime(midnight, timeZone: TimeZone(secondsFromGMT: 0)!) == "10/10 00:00")
+        precondition(boundary < resetDate, "Formatting must not change the underlying reset date")
+        print("PASS: minute precision rounds boundary seconds without changing reset data")
+        print("8 usage tests passed")
     }
 }
