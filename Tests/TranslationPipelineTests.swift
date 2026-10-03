@@ -37,21 +37,31 @@ import Foundation
         cancelled.cancel()
         do { _ = try await cancelled.value; fatalError("cancel must stop") }
         catch is CancellationError { print("PASS: cancellation stops long translation") }
-        let many = String(repeating: "测试", count: 300)
-        let perChunk = try await TextTranslation.run(many, limit: 100, timeout: .milliseconds(60)) { chunk in
-            try await Task.sleep(for: .milliseconds(20)); return chunk
+        // Hosted runners may pause for longer than a few milliseconds. Keep a
+        // generous per-piece margin while the complete run still exceeds it.
+        let many = String(repeating: "测试", count: 600)
+        let clock = ContinuousClock()
+        let began = clock.now
+        let perChunk = try await TextTranslation.run(many, limit: 100, timeout: .seconds(2)) { chunk in
+            try await Task.sleep(for: .milliseconds(200)); return chunk
         }
-        precondition(perChunk == many)
+        precondition(perChunk == many && began.duration(to: clock.now) > .seconds(2))
         print("PASS: total duration may exceed the per-chunk deadline while every chunk progresses")
+        var lateContinuation: CheckedContinuation<String, Never>?
+        var lateOperationFinished = false
         do {
-            _ = try await TextTranslation.withDeadline(timeout: .milliseconds(20)) {
-                await withCheckedContinuation { continuation in
-                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.12) { continuation.resume(returning: "late") }
-                }
+            _ = try await TextTranslation.withDeadline(timeout: .seconds(2)) {
+                let value = await withCheckedContinuation { lateContinuation = $0 }
+                lateOperationFinished = true
+                return value
             }
             fatalError("deadline must not wait for an uncooperative operation")
         } catch TranslationChunkError.timedOut { print("PASS: a blocked operation times out without trapping the caller") }
-        try await Task.sleep(for: .milliseconds(150))
+        // Release the operation only after the caller has returned. This also
+        // exercises a late result without racing two short wall-clock sleeps.
+        precondition(lateContinuation != nil && !lateOperationFinished)
+        lateContinuation?.resume(returning: "late")
+        while !lateOperationFinished { await Task.yield() }
         print("PASS: late completion after timeout cannot resume twice")
         print("8 translation pipeline tests passed")
     }
