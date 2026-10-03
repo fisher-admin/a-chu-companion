@@ -51,6 +51,16 @@ import Foundation
         ])
         guard ClaudeDecoder.messages(simple).first?.text == "Please restart." else { fputs("FAIL: flattened simple Claude reply\n", stderr); exit(1) }
         print("PASS: flattened simple Claude reply")
+        let unnamedHeading = ReplyNode(role: "AXGroup", label: "Message 1 of 1", children: [
+            .init(role: "AXGroup", children: [
+                .init(role: "AXHeading", children: [.init(role: "AXStaticText", text: "Claude responded: Please restart.")]),
+                .init(role: "AXStaticText", text: "Please restart.")
+            ])
+        ])
+        guard ClaudeDecoder.messages(unnamedHeading).first?.text == "Please restart." else {
+            fputs("FAIL: authorship text in heading child identifies the reply\n", stderr); exit(1)
+        }
+        print("PASS: authorship text in heading child identifies the reply")
 
         var lifecycle = ReplyTranslationLifecycle()
         let completed = lifecycle.begin()
@@ -72,6 +82,6 @@ import Foundation
         precondition(!lifecycle.finish(cancelled))
         print("PASS: cancelled reply translation clears active state")
 
-        print("12 reply tests passed")
+        print("13 reply tests passed")
     }
 }

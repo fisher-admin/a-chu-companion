@@ -29,6 +29,16 @@ enum DeliveryPolicy {
               range.length <= (before as NSString).length - range.location else { return nil }
         return (before as NSString).replacingCharacters(in: range, with: inserted)
     }
+    static func pasteConfirmed(actual: String?, before: String?, range: NSRange?, inserted: String, webComposer: Bool) -> Bool {
+        guard let actual, let before else { return false }
+        let expected = expectedValue(before: before, range: range, inserted: inserted)
+        if let expected, actual == expected { return true }
+        // Claude's empty contenteditable exposes a placeholder newline, which
+        // disappears on paste. Chromium can also omit its selection range.
+        guard range == nil || expected != nil,
+              before.isEmpty || (webComposer && before == "\n") else { return false }
+        return actual == inserted
+    }
     static func restoreClipboard(ownedCount: Int, currentCount: Int) -> Bool { ownedCount == currentCount }
 }
 

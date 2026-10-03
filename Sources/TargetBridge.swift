@@ -151,18 +151,23 @@ final class TargetBridge {
         guard matches(target) else { throw BridgeError.message("输入焦点已改变，未粘贴。") }
         _ = try validatedConversation(target)
         try key(9, flags: .maskCommand, pid: target.app.processIdentifier)
-        let expected = target.value.flatMap { DeliveryPolicy.expectedValue(before: $0, range: target.selection, inserted: text) }
+        func pasteConfirmed() -> Bool {
+            DeliveryPolicy.pasteConfirmed(actual: attribute(target.element, kAXValueAttribute) as? String,
+                                         before: target.value, range: target.selection, inserted: text,
+                                         webComposer: target.conversation != nil)
+        }
         var confirmed = false
         // Keep the clipboard available while the destination processes the paste.
         for _ in 0..<24 {
             try await Task.sleep(for: .milliseconds(50))
             guard matches(target) else { throw BridgeError.message("粘贴后焦点改变，未自动发送。请检查原输入框。") }
-            if let expected, attribute(target.element, kAXValueAttribute) as? String == expected { confirmed = true }
+            if pasteConfirmed() { confirmed = true }
         }
-        guard confirmed, let expected, attribute(target.element, kAXValueAttribute) as? String == expected else { return .unconfirmed }
+        guard confirmed, pasteConfirmed() else { return .unconfirmed }
         guard autoSend else { return .inserted }
         try Task.checkCancellation()
         guard matches(target) else { throw BridgeError.message("输入焦点已改变，未自动发送。") }
+        _ = try validatedConversation(target)
         try key(36, flags: commandReturn ? .maskCommand : [], pid: target.app.processIdentifier)
         return .sendKeyPressed
     }

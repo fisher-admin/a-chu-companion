@@ -45,9 +45,13 @@ enum ClaudeDecoder {
         return Int(parts[1])
     }
     private static func author(_ node: ReplyNode) -> ChatMessage.Author? {
-        if node.role == "AXHeading" {
-            if node.label.hasPrefix("Claude responded:") { return .assistant }
-            if node.label.hasPrefix("You said:") { return .user }
+        guard node.role == "AXHeading" else { return nil }
+        // Some native AX headings expose their name only as a text child.
+        // Keep the heading and authorship markers mandatory.
+        let names = [node.label, node.text] + node.children.filter { $0.role == "AXStaticText" }.map { $0.text.isEmpty ? $0.label : $0.text }
+        for name in names {
+            if name.hasPrefix("Claude responded:") { return .assistant }
+            if name.hasPrefix("You said:") { return .user }
         }
         return nil
     }

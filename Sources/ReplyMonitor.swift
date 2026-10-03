@@ -10,7 +10,7 @@ import Translation
     @Published var translating = false
     @Published var reverseConfiguration: TranslationSession.Configuration?
     private var systemJob: (candidate: ReplyCandidate, session: UUID, attempt: UUID)?
-    @Published var status = "通过A畜伴侣填入 Claude 后，自动等待并翻译新回复。"
+    @Published var status = ""
     @Published var original = ""
     @Published var chinese = ""
     @Published var sourceName = "Claude"

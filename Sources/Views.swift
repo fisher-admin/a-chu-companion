@@ -49,7 +49,7 @@ struct MainView: View {
                             }.padding(.vertical, 35).frame(maxWidth: .infinity, alignment: .leading)
                         }
                         ForEach(model.history) { item in ChatBubble(item: item).id(item.id) }
-                        if replies.watching || replies.translating || !replies.original.isEmpty {
+                        if !replies.status.isEmpty {
                             HStack(alignment: .top, spacing: 7) {
                                 if replies.translating { ProgressView().controlSize(.small) }
                                 else { Image(systemName: "text.bubble").foregroundStyle(.secondary) }
