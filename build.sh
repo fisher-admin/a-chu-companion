@@ -21,7 +21,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>AChuCompanion</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>1.1.4</string>
-<key>CFBundleVersion</key><string>21</string>
+<key>CFBundleVersion</key><string>22</string>
 <key>CFBundleIconFile</key><string>AChuCompanion</string>
 <key>LSMinimumSystemVersion</key><string>15.0</string>
 <key>LSUIElement</key><true/>

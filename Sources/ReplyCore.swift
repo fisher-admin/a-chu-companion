@@ -18,6 +18,11 @@ struct ReplyCandidate: Equatable, Sendable {
     let text: String
 }
 
+struct ReplyReadPending: LocalizedError, Sendable {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 struct ReplyTranslationLifecycle {
     private(set) var activeID: UUID?
     var isTranslating: Bool { activeID != nil }
@@ -120,14 +125,14 @@ enum ClaudeDecoder {
             let parts = node.label.split(separator: " ")
             guard parts.count == 4, parts[0] == "Message", parts[2] == "of",
                   let ordinal = Int(parts[1]), let total = Int(parts[3]), ordinal > 0, ordinal <= total else {
-                throw BridgeError.message("Claude 消息序号不完整，请等待页面更新后重试。")
+                throw ReplyReadPending(message: "Claude 消息序号尚未完整。")
             }
             return (ordinal, total)
         }
         guard let last = positions.last, last.ordinal == last.total,
               positions.allSatisfy({ $0.total == last.total }),
               zip(positions, positions.dropFirst()).allSatisfy({ $1.ordinal == $0.ordinal + 1 }) else {
-            throw BridgeError.message("Claude 消息区不连续或正在更新，本次读取已丢弃，请重试。")
+            throw ReplyReadPending(message: "Claude 消息区正在更新，本次读取已丢弃。")
         }
         var tail: [ChatMessage] = []
         for node in nodes.reversed() {
@@ -139,7 +144,7 @@ enum ClaudeDecoder {
             tail.append(decoded[0])
         }
         guard !tail.isEmpty else {
-            throw BridgeError.message("最新消息的正文或作者标记不完整，未使用部分内容，请重试。")
+            throw ReplyReadPending(message: "最新消息的正文或作者标记尚未完整，未使用部分内容。")
         }
         return tail.reversed()
     }

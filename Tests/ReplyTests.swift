@@ -99,6 +99,25 @@ import Foundation
         latestAttachment.label = "Message 8 of 8"
         do { _ = try ClaudeDecoder.recentMessages(Array(attachmentHistory.dropLast()) + [latestAttachment]); fatalError("unmarked latest message must stop") }
         catch { print("PASS: unmarked latest message remains unreadable instead of guessing") }
+        let thinking = ReplyNode(role: "AXGroup", label: "Message 4 of 4", children: [
+            .init(role: "AXGroup", children: [.init(role: "AXHeading", label: "Claude responded:"), .init(role: "AXStaticText", text: "")])
+        ])
+        do {
+            _ = try ClaudeDecoder.recentMessages([thinking])
+            fatalError("thinking without a body must not become a reply")
+        } catch {
+            guard error is ReplyReadPending else { fputs("FAIL: an empty thinking reply must remain retryable instead of stopping monitoring\n", stderr); exit(1) }
+            print("PASS: empty thinking reply is retryable without exposing partial content")
+        }
+        var slowTracker = ReplyTracker(baseline: old, outbound: outgoing.text, conversation: "https://claude.ai/chat/slow")
+        for _ in 0..<12 {
+            do { _ = try ClaudeDecoder.recentMessages([thinking]); fatalError("empty reply must wait") }
+            catch { precondition(error is ReplyReadPending) }
+            precondition(!slowTracker.bound && slowTracker.latest == nil)
+        }
+        precondition(try! slowTracker.observe(conversation: "https://claude.ai/chat/slow", messages: old + [outgoing, final], now: 12) == nil)
+        precondition(try! slowTracker.observe(conversation: "https://claude.ai/chat/slow", messages: old + [outgoing, final], now: 15)?.text == final.text)
+        print("PASS: a delayed complete reply binds and emits after repeated pending reads")
         do { _ = try ClaudeDecoder.recentMessages([attachmentHistory[3], attachmentHistory[5], attachmentHistory[6], attachmentHistory[7]]); fatalError("missing message ordinal must stop") }
         catch { print("PASS: an ordinal gap never produces a partial snapshot") }
         do { _ = try ClaudeDecoder.recentMessages([attachmentHistory[7], attachmentHistory[6]]); fatalError("reversed order must stop") }
@@ -160,6 +179,6 @@ import Foundation
         var gap = ReplyTracker(baseline: earlier, outbound: prompt.text, conversation: "https://claude.ai/chat/rolling")
         do { _ = try gap.observe(conversation: "https://claude.ai/chat/rolling", messages: earlier + [hugeReply], now: 0); fatalError("ordinal gap must stop") }
         catch { print("PASS: missing outbound ordinal cannot bind a different reply") }
-        print("24 reply tests passed")
+        print("26 reply tests passed")
     }
 }

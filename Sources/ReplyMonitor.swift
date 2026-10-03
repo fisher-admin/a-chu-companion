@@ -111,13 +111,23 @@ import Translation
                     }
                 } catch {
                     guard self.sessionID == token else { return }
-                    self.errors += 1
-                    // Transient page updates are recoverable without exposing partial snapshots.
-                    if self.errors >= 5 { self.pause(error.localizedDescription) }
-                    else { self.status = "正在重新检查 Claude 页面…" }
+                    self.handleReadFailure(error)
                 }
                 try? await Task.sleep(for: .seconds(1))
             }
+        }
+    }
+    func handleReadFailure(_ error: Error) {
+        if let pending = error as? ReplyReadPending {
+            // Thinking, tool use and streaming may leave the latest card
+            // unreadable for minutes. Preserve the verified baseline and
+            // never feed a partial snapshot to the tracker.
+            errors = 0
+            status = "等待 Claude 原文，自动读取会继续检查。" + pending.localizedDescription
+        } else {
+            errors += 1
+            if errors >= 5 { pause(error.localizedDescription) }
+            else { status = "正在重新检查 Claude 页面…" }
         }
     }
     func reportReplyObserved(_ candidate: ReplyCandidate) {

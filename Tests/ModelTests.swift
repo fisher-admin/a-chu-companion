@@ -70,6 +70,14 @@ import AppKit
         model.replies.cancelTranslation(); model.replies.stop(clear: true)
         precondition(model.history.count == 1 && model.history[0].foreign.hasSuffix("New ending."))
         print("PASS: revised replies retire stale Chinese; cancellation and stopping preserve the complete original")
-        print("11 multilingual model tests passed")
+        model.replies.watching = true
+        for _ in 0..<13 { model.replies.handleReadFailure(ReplyReadPending(message: "正文尚未就绪")) }
+        precondition(model.replies.watching && model.replies.status.contains("继续检查"))
+        print("PASS: repeated pending snapshots keep automatic reply monitoring alive")
+        for _ in 0..<5 { model.replies.handleReadFailure(BridgeError.message("检测到切换会话")) }
+        precondition(!model.replies.watching && model.replies.status.contains("切换会话"))
+        precondition(model.history[0].foreign.hasSuffix("New ending."))
+        print("PASS: persistent unsafe reads still stop monitoring and preserve acquired originals")
+        print("13 multilingual model tests passed")
     }
 }

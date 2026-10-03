@@ -91,7 +91,7 @@ final class ClaudeSource: @unchecked Sendable {
             AXUIElementSetMessagingTimeout(element, 0.5)
             var raw: CFArray?
             guard AXUIElementCopyMultipleAttributeValues(element, metadata, [], &raw) == .success,
-                  let values = raw as? [Any], values.count == 4 else { throw BridgeError.message("Claude 界面暂时不可读取，请保持目标会话打开后重试。") }
+                  let values = raw as? [Any], values.count == 4 else { throw ReplyReadPending(message: "Claude 界面暂时不可读取。") }
             for value in values {
                 if CFGetTypeID(value as CFTypeRef) == AXValueGetTypeID() {
                     let failure = value as! AXValue
@@ -99,7 +99,7 @@ final class ClaudeSource: @unchecked Sendable {
                     var error = AXError.success
                     AXValueGetValue(failure, .axError, &error)
                     guard error == .attributeUnsupported || error == .noValue else {
-                        throw BridgeError.message("Claude 消息结构未完整返回，本次读取已丢弃，请重试。")
+                        throw ReplyReadPending(message: "Claude 消息结构尚未完整返回，本次读取已丢弃。")
                     }
                 }
             }
@@ -118,7 +118,7 @@ final class ClaudeSource: @unchecked Sendable {
             return nil
         }
         guard let region = try await findTranscript(root, depth: 0) else {
-            if !fixture && URL(string: conversation)?.path.hasPrefix("/chat/") == true { throw BridgeError.message("当前页面没有可识别的 Claude 消息区，请重新连接。") }
+            if !fixture && URL(string: conversation)?.path.hasPrefix("/chat/") == true { throw ReplyReadPending(message: "Claude 消息区尚未就绪。") }
             return ReplySnapshot(conversation: conversation, messages: [], foundTranscript: false)
         }
         var elements: [(ordinal: Int, total: Int, element: AXUIElement)] = []
@@ -136,7 +136,7 @@ final class ClaudeSource: @unchecked Sendable {
         elements.sort { $0.ordinal < $1.ordinal }
         if let latest = elements.last {
             guard latest.ordinal == latest.total, Set(elements.map(\.ordinal)).count == elements.count,
-                  elements.allSatisfy({ $0.total == latest.total }) else { throw BridgeError.message("Claude 消息区正在更新，等待完整消息后重试。") }
+                  elements.allSatisfy({ $0.total == latest.total }) else { throw ReplyReadPending(message: "Claude 消息区正在更新。") }
         }
         func read(_ element: AXUIElement, depth: Int) async throws -> ReplyNode {
             let (role, label, children) = try await info(element, depth: depth)
@@ -148,7 +148,7 @@ final class ClaudeSource: @unchecked Sendable {
                 var value: CFTypeRef?
                 let result = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value)
                 guard result == .success || result == .attributeUnsupported || result == .noValue else {
-                    throw BridgeError.message("消息文字尚未完整返回，已丢弃本次读取，请重试。")
+                    throw ReplyReadPending(message: "消息文字尚未完整返回，已丢弃本次读取。")
                 }
                 text = value as? String ?? ""
             }
