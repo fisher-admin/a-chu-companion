@@ -16,7 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         AppMenus.install()
         NSApp.setActivationPolicy(.accessory)
         window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 610, height: 780),
-                          styleMask: [.titled, .closable, .resizable, .nonactivatingPanel, .fullSizeContentView], backing: .buffered, defer: false)
+                          styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "A畜伴侣 · Claude 双向翻译"
         window.isOpaque = false
         window.backgroundColor = .clear
@@ -32,12 +32,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.level = .floating
         (window as? NSPanel)?.hidesOnDeactivate = false
         model.replies.showPanel = { [weak self] in self?.window.orderFrontRegardless() }
+        model.replies.onReplyAcquired = { [weak self] id, foreign, language in
+            self?.model.recordReplyOriginal(id: id, foreign: foreign, language: language)
+        }
         model.replies.onReply = { [weak self] id, foreign, chinese, language in
             self?.model.recordReply(id: id, foreign: foreign, chinese: chinese, language: language)
         }
         model.replies.onReplyObserved = { [weak self] in self?.usage.refresh() }
         usage.refresh()
-        model.hideWindow = { [weak self] in self?.window.orderOut(nil) }
         model.revealWindow = { [weak self] in self?.show(capture: false) }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = CompanionIcon.image(size: 20, template: true)

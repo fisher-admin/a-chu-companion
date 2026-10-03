@@ -14,6 +14,16 @@ final class TranslatorModel: ObservableObject {
     }
     @Published var history: [ChatItem] = []
     @Published private(set) var chatRevision = 0
+    func recordReplyOriginal(id: String, foreign: String, language: TranslationLanguage) {
+        if let i = history.firstIndex(where: { $0.id == id }) {
+            if history[i].foreign != foreign { history[i].chinese = "" }
+            history[i].foreign = foreign; history[i].language = language
+        } else {
+            history.append(.init(id: id, isUser: false, chinese: "", foreign: foreign, language: language))
+        }
+        if history.count > 40 { history.removeFirst(history.count - 40) }
+        chatRevision += 1
+    }
     func recordReply(id: String, foreign: String, chinese: String, language: TranslationLanguage) {
         if let i = history.firstIndex(where: { $0.id == id }) { history[i].foreign = foreign; history[i].chinese = chinese; history[i].language = language }
         else { history.append(.init(id: id, isUser: false, chinese: chinese, foreign: foreign, language: language)) }
@@ -57,7 +67,6 @@ final class TranslatorModel: ObservableObject {
     @Published var commandReturn = UserDefaults.standard.bool(forKey: "commandReturn") {
         didSet { UserDefaults.standard.set(commandReturn, forKey: "commandReturn") }
     }
-    var hideWindow: () -> Void = {}
     var revealWindow: () -> Void = {}
     private let permissionMonitor: AccessibilityPermissionMonitor
     private var target: TargetBridge.Target?
@@ -192,11 +201,15 @@ final class TranslatorModel: ObservableObject {
             await replies.arm(target: target, outbound: translated, engine: engine, baseURL: baseURL, model: aiModel, language: job.language)
             guard activeID == job.id, !Task.isCancelled else { return }
             let outcome = try await TargetBridge.deliver(translated, to: target, autoSend: job.send,
-                                                        commandReturn: job.commandReturn, hide: hideWindow)
+                                                        commandReturn: job.commandReturn)
             guard activeID == job.id else { return }
             switch outcome {
             case .inserted: report("已填入 \(target.name)，由你确认后发送。")
-            case .sendKeyPressed: report("已填入 \(target.name) 并按下发送快捷键，请以目标软件的显示为准。")
+            case .sendKeyPressed:
+                report("已填入 \(target.name) 并按下发送快捷键，请以目标软件的显示为准。")
+                if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.app.processIdentifier {
+                    revealWindow()
+                }
             case .unconfirmed:
                 report("已尝试粘贴，但目标软件未提供可核对的文字。没有自动发送，请检查输入框。", error: true)
                 revealWindow()

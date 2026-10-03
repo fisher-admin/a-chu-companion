@@ -149,7 +149,13 @@ struct MainView: View {
                 else { GlassBackground().ignoresSafeArea() }
             }
             .translationTask(model.configuration) { session in await model.runApple(session) }
-            .translationTask(replies.reverseConfiguration) { session in await replies.runSystemReply(session) }
+            .background {
+                if let attempt = replies.systemTaskID, let configuration = replies.reverseConfiguration {
+                    Color.clear.frame(width: 0, height: 0)
+                        .translationTask(configuration) { session in await replies.runSystemReply(session, attempt: attempt) }
+                        .id(attempt)
+                }
+            }
             .sheet(isPresented: $model.showSettings) { SettingsView(model: model) }
             .sheet(isPresented: $usage.showConnection) { ClaudeUsageConnectionView(usage: usage) }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.refreshPermission() }
@@ -163,10 +169,13 @@ struct ChatBubble: View {
         HStack(alignment: .top) {
             if item.isUser { Spacer(minLength: 55) }
             VStack(alignment: .leading, spacing: 8) {
-                Label(item.isUser ? "你" : "Claude · 中文译文", systemImage: item.isUser ? "person.crop.circle" : "bubble.left")
+                Label(item.isUser ? "你" : (item.chinese.isEmpty ? "Claude · 原文已读取" : "Claude · 中文译文"), systemImage: item.isUser ? "person.crop.circle" : "bubble.left")
                     .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-                MessageText(text: item.chinese)
-                if !item.foreign.isEmpty {
+                if !item.isUser && item.chinese.isEmpty {
+                    MessageText(text: item.foreign, original: true)
+                    Text("中文译文将在翻译完成后显示。").font(.system(size: 10)).foregroundStyle(.secondary)
+                } else { MessageText(text: item.chinese) }
+                if !item.foreign.isEmpty && (item.isUser || !item.chinese.isEmpty) {
                     DisclosureGroup(item.language.name + "原文", isExpanded: $expanded) {
                         MessageText(text: item.foreign, original: true)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 5)

@@ -106,8 +106,7 @@ final class TargetBridge {
         down.flags = flags; up.flags = flags
         down.postToPid(pid); up.postToPid(pid)
     }
-    static func deliver(_ text: String, to target: Target, autoSend: Bool, commandReturn: Bool,
-                        hide: () -> Void) async throws -> Outcome {
+    static func deliver(_ text: String, to target: Target, autoSend: Bool, commandReturn: Bool) async throws -> Outcome {
         guard trusted, !target.app.isTerminated else { throw BridgeError.message("目标软件已关闭或辅助功能权限不可用。译文已保留。") }
         guard NSApp.isActive || NSApp.keyWindow?.isKeyWindow == true else { throw BridgeError.message("你已切换到其他软件，本次没有自动填入。请重新选择目标输入框。") }
         let existing = attribute(target.element, kAXValueAttribute) as? String
@@ -115,7 +114,8 @@ final class TargetBridge {
             throw BridgeError.message("原输入框的内容或光标位置已改变，本次没有填入。请重新选择输入框。")
         }
         try Task.checkCancellation()
-        hide()
+        // The companion is a persistent chat panel. Activating the destination
+        // restores its input focus without dismissing the visible conversation.
         target.app.activate()
         // Activation may restore focus, but we never force a different control to become focused.
         for _ in 0..<16 {

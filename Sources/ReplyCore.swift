@@ -62,6 +62,9 @@ enum ClaudeDecoder {
         return nil
     }
     private static func hasControls(_ node: ReplyNode) -> Bool {
+        // The desktop's author-marked answer has a Code group containing its
+        // actual text alongside Open in Claude Code / Copy controls.
+        if node.role == "AXGroup", node.label == "Code" { return false }
         if node.role == "AXButton" && ["Copy", "Copy code", "复制", "复制代码"].contains(node.label) { return false }
         return ["AXButton", "AXPopUpButton", "AXCheckBox", "AXToolbar", "AXTextArea", "AXTextField"].contains(node.role) || node.children.contains(where: hasControls)
     }
@@ -81,10 +84,22 @@ enum ClaudeDecoder {
                 func allText(_ node: ReplyNode) -> [String] {
                     (node.role == "AXStaticText" ? [node.text.isEmpty ? node.label : node.text] : []) + node.children.flatMap(allText)
                 }
-                let statusText = Set(controlGroups.flatMap(allText))
-                let body = parent.children.compactMap { child -> String? in
+                let statusText = Set(controlGroups.flatMap(allText) + controlGroups.filter { $0.role == "AXButton" }.map(\.label))
+                let body = parent.children.enumerated().compactMap { index, child -> String? in
                     guard self.author(child) == nil, !hasControls(child) else { return nil }
-                    let value = text(child)
+                    var value = text(child)
+                    // Desktop flattens a tool card into status text, a button,
+                    // then a text node with the same status prefixed to the answer.
+                    if index > 0 {
+                        let previous = parent.children[index - 1]
+                        if previous.role == "AXButton", hasControls(previous), !previous.label.isEmpty,
+                           value.hasPrefix(previous.label) {
+                            let remainder = value.dropFirst(previous.label.count)
+                            if remainder.first?.isWhitespace == true {
+                                value = String(remainder.drop(while: \.isWhitespace))
+                            }
+                        }
+                    }
                     guard !value.isEmpty, !statusText.contains(value) else { return nil }
                     return value
                 }.joined(separator: "\n\n")
@@ -99,6 +114,35 @@ enum ClaudeDecoder {
         return result.sorted { $0.ordinal < $1.ordinal }
     }
     static func normalize(_ value: String) -> String { value.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+    static func recentMessages(_ nodes: [ReplyNode]) throws -> [ChatMessage] {
+        guard !nodes.isEmpty else { return [] }
+        let positions = try nodes.map { node -> (ordinal: Int, total: Int) in
+            let parts = node.label.split(separator: " ")
+            guard parts.count == 4, parts[0] == "Message", parts[2] == "of",
+                  let ordinal = Int(parts[1]), let total = Int(parts[3]), ordinal > 0, ordinal <= total else {
+                throw BridgeError.message("Claude 消息序号不完整，请等待页面更新后重试。")
+            }
+            return (ordinal, total)
+        }
+        guard let last = positions.last, last.ordinal == last.total,
+              positions.allSatisfy({ $0.total == last.total }),
+              zip(positions, positions.dropFirst()).allSatisfy({ $1.ordinal == $0.ordinal + 1 }) else {
+            throw BridgeError.message("Claude 消息区不连续或正在更新，本次读取已丢弃，请重试。")
+        }
+        var tail: [ChatMessage] = []
+        for node in nodes.reversed() {
+            let decoded = messages(node)
+            // Historical attachment-only cards have no author/body marker.
+            // Stop at that boundary; never guess its author or skip a gap in
+            // the current turn. The latest message must itself be complete.
+            guard decoded.count == 1 else { break }
+            tail.append(decoded[0])
+        }
+        guard !tail.isEmpty else {
+            throw BridgeError.message("最新消息的正文或作者标记不完整，未使用部分内容，请重试。")
+        }
+        return tail.reversed()
+    }
     static func chunks(_ text: String, limit: Int = 5_000) -> [String] {
         var chunks: [String] = []; var start = text.startIndex
         while start < text.endIndex {

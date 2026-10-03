@@ -43,6 +43,66 @@ import Foundation
         precondition(ClaudeDecoder.messages(banner).isEmpty)
         precondition(ClaudeDecoder.messages(message(1, "Unknown", "unrelated text")).isEmpty)
         print("PASS: unmarked UI text never becomes a reply")
+        let desktopCode = ReplyNode(role: "AXGroup", label: "Message 2 of 2", children: [
+            .init(role: "AXGroup", children: [
+                .init(role: "AXHeading", label: "Claude responded: Keep settings."),
+                .init(role: "AXStaticText", text: "Run this after saving:"),
+                .init(role: "AXGroup", label: "Code", children: [
+                    .init(role: "AXGroup", children: [.init(role: "AXButton", label: "Open in Claude Code"), .init(role: "AXButton", label: "Copy to clipboard")]),
+                    .init(role: "AXStaticText", text: "printf 'keep settings'\n")
+                ]),
+                .init(role: "AXStaticText", text: "Then continue.")
+            ])
+        ])
+        guard let codeText = ClaudeDecoder.messages(desktopCode).first?.text,
+              codeText.contains("printf 'keep settings'\n"), codeText.contains("Then continue."),
+              !codeText.contains("Open in Claude Code"), !codeText.contains("Copy to clipboard") else {
+            fputs("FAIL: desktop code block controls must not remove the code body\n", stderr); exit(1)
+        }
+        print("PASS: desktop code block keeps complete code and excludes its buttons")
+        let flatActivity = ReplyNode(role: "AXGroup", label: "Message 2 of 2", children: [
+            .init(role: "AXGroup", children: [
+                .init(role: "AXHeading", label: "Claude responded: Keep the existing settings."),
+                .init(role: "AXStaticText", text: "Listed files on your computer"),
+                .init(role: "AXButton", label: "Listed files on your computer"),
+                .init(role: "AXStaticText", text: "Listed files on your computer Keep the existing settings."),
+                .init(role: "AXStaticText", text: "No changes were made.")
+            ])
+        ])
+        guard ClaudeDecoder.messages(flatActivity).first?.text == "Keep the existing settings.\n\nNo changes were made." else {
+            fputs("FAIL: flat desktop tool activity must not contaminate the response body\n", stderr); exit(1)
+        }
+        print("PASS: flat tool activity is removed without dropping adjacent reply text")
+        var wrappedActivity = flatActivity
+        let wrappedText = wrappedActivity.children[0].children[3]
+        wrappedActivity.children[0].children[3] = .init(role: "AXGroup", children: [wrappedText])
+        guard ClaudeDecoder.messages(wrappedActivity).first?.text == "Keep the existing settings.\n\nNo changes were made." else {
+            fputs("FAIL: a paragraph wrapper must not keep the duplicated tool prefix\n", stderr); exit(1)
+        }
+        print("PASS: wrapped paragraph keeps reply text without the adjacent tool prefix")
+        let attachment = ReplyNode(role: "AXGroup", label: "Message 3 of 8", children: [
+            .init(role: "AXGroup", children: [.init(role: "AXButton", label: "Pasted text.txt"), .init(role: "AXStaticText", text: "TXT")]),
+            .init(role: "AXButton", label: "Show message actions")
+        ])
+        let attachmentHistory = [message(1, "You said", "Old prompt"), message(2, "Claude responded", "Old answer"), attachment,
+            message(4, "Claude responded", "Attachment answer"), message(5, "You said", "Earlier prompt"),
+            message(6, "Claude responded", "Earlier answer"), message(7, "You said", "Current prompt"),
+            message(8, "Claude responded", "Current answer")]
+        guard let tail = try? ClaudeDecoder.recentMessages(attachmentHistory), tail.map(\.ordinal) == [4, 5, 6, 7, 8] else {
+            fputs("FAIL: an old attachment must not block a later complete conversation tail\n", stderr); exit(1)
+        }
+        var attachmentTracker = ReplyTracker(baseline: Array(tail.dropLast(2)), outbound: "Current prompt", conversation: "https://claude.ai/chat/attachment")
+        _ = try! attachmentTracker.observe(conversation: "https://claude.ai/chat/attachment", messages: tail, now: 0)
+        precondition(try! attachmentTracker.observe(conversation: "https://claude.ai/chat/attachment", messages: tail, now: 4)?.text == "Current answer")
+        print("PASS: historical attachment permits only the latest verified continuous reply")
+        var latestAttachment = attachment
+        latestAttachment.label = "Message 8 of 8"
+        do { _ = try ClaudeDecoder.recentMessages(Array(attachmentHistory.dropLast()) + [latestAttachment]); fatalError("unmarked latest message must stop") }
+        catch { print("PASS: unmarked latest message remains unreadable instead of guessing") }
+        do { _ = try ClaudeDecoder.recentMessages([attachmentHistory[3], attachmentHistory[5], attachmentHistory[6], attachmentHistory[7]]); fatalError("missing message ordinal must stop") }
+        catch { print("PASS: an ordinal gap never produces a partial snapshot") }
+        do { _ = try ClaudeDecoder.recentMessages([attachmentHistory[7], attachmentHistory[6]]); fatalError("reversed order must stop") }
+        catch { print("PASS: out-of-order messages never produce a snapshot") }
         let long = String(repeating: "😀", count: 12_010)
         precondition(ClaudeDecoder.chunks(long).joined() == long && ClaudeDecoder.chunks(long).allSatisfy { $0.count <= 5000 })
         print("PASS: long replies chunk without losing Unicode")
@@ -100,6 +160,6 @@ import Foundation
         var gap = ReplyTracker(baseline: earlier, outbound: prompt.text, conversation: "https://claude.ai/chat/rolling")
         do { _ = try gap.observe(conversation: "https://claude.ai/chat/rolling", messages: earlier + [hugeReply], now: 0); fatalError("ordinal gap must stop") }
         catch { print("PASS: missing outbound ordinal cannot bind a different reply") }
-        print("17 reply tests passed")
+        print("24 reply tests passed")
     }
 }

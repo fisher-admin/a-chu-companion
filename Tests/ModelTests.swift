@@ -55,6 +55,21 @@ import AppKit
         model.replies.reportReplyObserved(large)
         precondition(observed == 3)
         print("PASS: acquired replies refresh usage once per version even when oversized; a new binding refreshes again")
-        print("8 multilingual model tests passed")
+        model.history = []
+        let raw = "Run after saving:\n\nprintf 'KEEP_SETTINGS'\n\nComplete ending."
+        model.recordReplyOriginal(id: "reply", foreign: raw, language: .english)
+        precondition(model.history.count == 1 && model.history[0].foreign == raw && model.history[0].chinese.isEmpty)
+        print("PASS: a complete original reply is visible before Chinese translation starts")
+        model.recordReply(id: "reply", foreign: raw, chinese: "保存后运行。", language: .english)
+        precondition(model.history.count == 1 && model.history[0].foreign == raw && model.history[0].chinese == "保存后运行。")
+        model.recordReplyOriginal(id: "reply", foreign: raw, language: .english)
+        precondition(model.history.count == 1 && model.history[0].chinese == "保存后运行。")
+        print("PASS: successful translation updates the same bubble; identical originals do not erase it")
+        model.recordReplyOriginal(id: "reply", foreign: raw + "\nNew ending.", language: .english)
+        precondition(model.history.count == 1 && model.history[0].chinese.isEmpty && model.history[0].foreign.hasSuffix("New ending."))
+        model.replies.cancelTranslation(); model.replies.stop(clear: true)
+        precondition(model.history.count == 1 && model.history[0].foreign.hasSuffix("New ending."))
+        print("PASS: revised replies retire stale Chinese; cancellation and stopping preserve the complete original")
+        print("11 multilingual model tests passed")
     }
 }

@@ -9,6 +9,7 @@ import Translation
     @Published var watching = false
     @Published var translating = false
     @Published var reverseConfiguration: TranslationSession.Configuration?
+    @Published private(set) var systemTaskID: UUID?
     private var systemJob: (candidate: ReplyCandidate, session: UUID, attempt: UUID)?
     @Published var status = ""
     @Published var original = ""
@@ -16,6 +17,7 @@ import Translation
     @Published var sourceName = "Claude"
     var showPanel: () -> Void = {}
     var onReply: (String, String, String, TranslationLanguage) -> Void = { _, _, _, _ in }
+    var onReplyAcquired: (String, String, TranslationLanguage) -> Void = { _, _, _ in }
     var onReplyObserved: () -> Void = {}
     private var lastUsageCandidate: ReplyCandidate?
     private var source: ClaudeSource?
@@ -129,15 +131,34 @@ import Translation
         cancelReplyTranslation(resetSystemSession: false)
         let attempt = replyLifecycle.begin()
         version = candidate; original = candidate.text; chinese = ""; translating = replyLifecycle.isTranslating
+        onReplyAcquired(token.uuidString + ":" + String(candidate.ordinal), candidate.text, language)
         do { try ForeignTextPolicy.validate(candidate.text, incoming: true) }
         catch { stop(clear: true); status = error.localizedDescription; return }
         if engine == "apple" {
-            status = "正在准备系统翻译…"
-            systemJob = (candidate: candidate, session: token, attempt: attempt)
-            armReplyTimeout(candidate, token: token, attempt: attempt, stage: "系统翻译准备", after: .seconds(120))
-            if reverseConfiguration == nil {
-                reverseConfiguration = .init(source: .init(identifier: language.rawValue), target: .init(identifier: "zh-Hans"))
-            } else { reverseConfiguration?.invalidate() }
+            status = "原文已读取，正在检查翻译语言…"
+            let job = (candidate: candidate, session: token, attempt: attempt)
+            systemJob = job
+            reverseConfiguration = nil; systemTaskID = nil
+            let from = Locale.Language(identifier: language.rawValue)
+            let to = Locale.Language(identifier: "zh-Hans")
+            translation = Task {
+                do {
+                    let installed = try await TextTranslation.withDeadline(timeout: .seconds(10)) {
+                        await LanguageAvailability().status(from: from, to: to) == .installed ? "installed" : "download"
+                    }
+                    guard isCurrent(job), !Task.isCancelled else { return }
+                    if installed == "installed", #available(macOS 26.0, *) {
+                        // Installed packs do not need a view-provided session or a download prompt.
+                        let session = TranslationSession(installedSource: from, target: to)
+                        await runSystemReply(session, attempt: attempt, prepare: false)
+                    } else {
+                        status = "原文已读取，正在启动系统翻译…"
+                        systemTaskID = attempt
+                        reverseConfiguration = .init(source: from, target: to)
+                        armReplyTimeout(candidate, token: token, attempt: attempt, stage: "翻译任务启动", after: .seconds(20))
+                    }
+                } catch { translationFailed(error, candidate: candidate, token: token, attempt: attempt) }
+            }
             return
         }
         status = "正在把 Claude 的回复翻译成中文…"
@@ -155,12 +176,15 @@ import Translation
             } catch { translationFailed(error, candidate: candidate, token: token, attempt: attempt) }
         }
     }
-    func runSystemReply(_ session: TranslationSession) async {
-        guard let job = systemJob, isCurrent(job) else { return }
+    func runSystemReply(_ session: TranslationSession, attempt: UUID, prepare: Bool = true) async {
+        guard let job = systemJob, job.attempt == attempt, isCurrent(job) else { return }
         do {
             activeSession = session
             replyTimeout?.cancel(); replyTimeout = nil
-            _ = try await TextTranslation.withDeadline { try await session.prepareTranslation(); return "" }
+            if prepare {
+                status = "原文已读取，正在准备翻译语言…"
+                _ = try await TextTranslation.withDeadline { try await session.prepareTranslation(); return "" }
+            }
             guard isCurrent(job) else { return }
             let translated = try await TextTranslation.run(job.candidate.text, progress: { [weak self] part, total in
                 self?.status = "正在把回复译回中文… \(part) / \(total) 段"
@@ -189,7 +213,7 @@ import Translation
         translation?.cancel(); translation = nil
         let timedOutSystemJob = systemJob?.attempt == attempt
         systemJob = nil
-        if timedOutSystemJob { reverseConfiguration = nil }
+        if timedOutSystemJob { reverseConfiguration = nil; systemTaskID = nil }
         translating = replyLifecycle.isTranslating
         if tracker?.latest != candidate {
             status = "Claude 正在回复，等待文字稳定…"
@@ -244,7 +268,7 @@ import Translation
         if let attempt = replyLifecycle.activeID { _ = replyLifecycle.cancel(attempt) }
         systemJob = nil
         translating = replyLifecycle.isTranslating
-        if resetSystemSession && hadSystemJob { reverseConfiguration = nil }
+        if resetSystemSession && hadSystemJob { reverseConfiguration = nil; systemTaskID = nil }
     }
     func cancelTranslation() {
         guard translating else { return }
@@ -258,6 +282,7 @@ import Translation
     private func pause(_ message: String) {
         watching = false; cancelReplyTranslation(resetSystemSession: true); polling?.cancel(); polling = nil
         reverseConfiguration = nil
+        systemTaskID = nil
         status = message
     }
     func stop(clear: Bool = false) {
@@ -265,6 +290,7 @@ import Translation
         polling?.cancel(); polling = nil; cancelReplyTranslation(resetSystemSession: true)
         source = nil; tracker = nil; version = nil; lastUsageCandidate = nil
         reverseConfiguration = nil
+        systemTaskID = nil
         status = "自动读取已停止。"
         if clear { original = ""; chinese = "" }
     }

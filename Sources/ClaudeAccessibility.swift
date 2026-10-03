@@ -160,8 +160,7 @@ final class ClaudeSource: @unchecked Sendable {
         for element in elements { nodes.append(try await read(element.element, depth: 0)) }
         try Task.checkCancellation()
         guard isInCurrentWindow(), fixture || Self.urlString(root) == conversation else { throw BridgeError.message("读取期间对话已切换，本次内容已丢弃，请重新连接。") }
-        let messages = ClaudeDecoder.messages(.init(role: "AXGroup", label: "Chat messages", children: nodes))
-        guard messages.count == elements.count else { throw BridgeError.message("消息正文或作者标记不完整，未使用部分内容，请重试。") }
+        let messages = try ClaudeDecoder.recentMessages(nodes)
         return ReplySnapshot(conversation: conversation, messages: messages, foundTranscript: true)
     }
 }
