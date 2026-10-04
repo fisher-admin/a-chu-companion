@@ -216,15 +216,16 @@ import Translation
             return
         }
         status = "正在把 Claude 的回复翻译成中文…"
-        let base = baseURL; let model = self.model
+        let base = baseURL; let model = self.model; let provider = RemoteTranslationProvider(rawValue: engine)
         translation = Task {
             do {
-                let key = try Credentials.read(); let language = self.language
+                guard let provider else { throw BridgeError.message("翻译方式无效，请重新选择。") }
+                let key = try Credentials.read(for: provider); let language = self.language
                 let translated = try await TextTranslation.run(candidate.text, progress: { [weak self] part, total in
                     self?.status = "正在把回复译回中文… \(part) / \(total) 段"
                 }) { chunk in
-                    let request = try AIProtocol.request(text: chunk, baseURL: base, model: model, key: key, direction: .toChinese(language))
-                    return try await AITranslator.translate(request)
+                    let request = try provider.request(text: chunk, baseURL: base, model: model, key: key, direction: .toChinese(language))
+                    return try await AITranslator.translate(request, provider: provider)
                 }
                 commit(translated, candidate: candidate, token: token, attempt: attempt)
             } catch { translationFailed(error, candidate: candidate, token: token, attempt: attempt) }

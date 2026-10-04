@@ -2,13 +2,13 @@ import Foundation
 import Security
 
 enum Credentials {
-    private static let query: [String: Any] = [
+    private static func query(_ provider: RemoteTranslationProvider) -> [String: Any] { [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: "local.achu.companion",
-        kSecAttrAccount as String: "translation-api-key"
-    ]
-    static func read() throws -> String {
-        var request = query
+        kSecAttrAccount as String: provider.credentialAccount
+    ] }
+    static func read(for provider: RemoteTranslationProvider = .openAI) throws -> String {
+        var request = query(provider)
         request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -19,7 +19,8 @@ enum Credentials {
         }
         return key
     }
-    static func save(_ key: String) throws {
+    static func save(_ key: String, for provider: RemoteTranslationProvider = .openAI) throws {
+        let query = query(provider)
         if key.isEmpty {
             let status = SecItemDelete(query as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else { throw BridgeError.message("无法删除钥匙串密钥。") }

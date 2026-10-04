@@ -16,6 +16,7 @@ This is an independent community project, not an Anthropic or official Claude pr
 ## Features
 
 - **Bidirectional translation:** Chinese to the selected language, completed foreign-language replies back to Chinese. macOS system translation is the default and requires no API key. Installed language packs are reused.
+- **Gemini translation:** Choose Google's native API with Gemini 3.1 Flash-Lite pinned by default. Outgoing and incoming translations share the selected configuration, with a bidirectional connection check and a separate Keychain credential.
 - **One-page chat:** Enter submits; Shift+Enter inserts a newline. Enter used to confirm Chinese input-method composition does not submit. Translate only, insert and review, or opt into automatic sending.
 - **Continuous reading:** Connecting starts monitoring. Messages entered in the companion or directly in Claude can produce translated replies. Original text appears before Chinese; tool activity and interface controls are excluded from formal replies.
 - **Background operation:** Keep working in another app while reading continues. Closing the companion window hides it; stopping reading or quitting ends monitoring. Keep the connected Claude conversation window open.
@@ -33,7 +34,7 @@ This is an independent community project, not an Anthropic or official Claude pr
 | Hardware | Apple Silicon Mac; current build script targets arm64 |
 | macOS | Minimum deployment target 15; mainly tested on 26 |
 | Chat clients | Claude Desktop (Chat and Code modes) and claude.ai in Chrome |
-| Translation | macOS system translation; optional configured OpenAI-compatible service |
+| Translation | macOS system translation; Google Gemini; configured OpenAI-compatible service |
 | Permissions | Accessibility for insertion and reading; possible Keychain authorization for desktop usage |
 | Chinese input | Up to 10,000 characters, including punctuation and line breaks |
 | Foreign text | Outgoing translations and incoming originals each up to 50,000 characters, not words |
@@ -64,6 +65,12 @@ Releases currently provide source, not a universal Apple Developer ID notarized 
 
 Permission changes are detected without restarting. Normal updates using the same local signing identity can retain authorization; a new computer, changed identity, or revoked permission may require authorization again.
 
+## Configure Gemini
+
+Open Translation Settings at the top right, choose Gemini, keep `gemini-3.1-flash-lite`, enable the key-update checkbox, and enter your Google AI Studio API key in the masked field. Test Connection checks Chinese-to-English and English-to-Chinese before saving. It sends only two fixed synthetic sentences, does not read the conversation, and does not save an unsubmitted key. Saved provider/model preferences and the Keychain key survive restarts and normal updates.
+
+Gemini calls Google's native `generateContent` endpoint directly, without an OpenAI-compatible base URL. `gemini-flash-latest` is a moving Flash alias and does not pin Flash-Lite. The model has a limited free tier; actual limits depend on the project. Billing-enabled projects may incur charges, and free-tier content may be used to improve Google products. See [Gemini setup and corrected request example](docs/GEMINI_SETUP.md).
+
 ## Updates and history
 
 ```bash
@@ -77,7 +84,7 @@ Installation validates the existing identity. Failed builds or identity mismatch
 
 ## Data and privacy
 
-Default system translation requires no translation API key; initial language-pack downloads may need a network connection. Optional AI translation sends Chinese drafts and foreign replies to your configured provider, under that provider's pricing and data policies.
+Default system translation requires no translation API key; initial language-pack downloads may need a network connection. Gemini sends Chinese drafts and foreign replies directly to Google. Optional compatible AI translation sends them to your configured provider. The selected provider's pricing and data policies apply.
 
 Chat history is not written to disk. Supplied sessions and translation keys live in macOS Keychain. Usage requests are read-only, send session credentials only to the Claude domain, and do not send chat messages. Connect the correct usage account when browser and desktop logins differ.
 
@@ -99,7 +106,7 @@ python3 Tools/check_repository.py --history
 
 GitHub CI performs repository checks, offline regressions, loopback HTTP tests, and certificate-free builds. CodeQL analyzes Swift, Python, and Actions workflows. It does not sign into Claude, send real messages, or install language packs. Language, identity, and actual Claude tests run separately; see [Contributing](CONTRIBUTING.md) and [Verification records](TEST_PLAN.md).
 
-The current app has 191 regression checks plus seven loopback HTTP checks. Native validation covers continuous replies, slow responses, background reading, history selection, stop/resume, preferences, and replies approaching 50,000 characters. Local and real Desktop Code-mode checks are recorded separately in the verification document; terminal CLI chat is outside the supported scope. Untested browser/OS combinations are not presented as verified.
+The current app has 213 regression checks plus fourteen loopback HTTP checks, including Gemini bidirectional requests, credential separation, failure feedback, and adaptive long-text retries. Native validation covers continuous replies, slow responses, background reading, history selection, stop/resume, preferences, and replies approaching 50,000 characters. Actual Google calls and Desktop Code-mode checks are recorded separately in the verification document; terminal CLI chat is outside the supported scope. Untested browser/OS combinations are not presented as verified.
 
 ## Community and license
 

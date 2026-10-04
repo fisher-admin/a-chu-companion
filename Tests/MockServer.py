@@ -4,6 +4,22 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        if self.path.startswith('/gemini/'):
+            if self.headers.get('X-goog-api-key') != 'dummy-gemini-key' or self.headers.get('Authorization') or 'systemInstruction' not in body:
+                self.send_response(400); self.end_headers(); return
+            text = body['contents'][0]['parts'][0]['text']
+            if self.path.endswith('/redirect'):
+                self.send_response(307); self.send_header('Location', '/gemini/ok'); self.end_headers(); return
+            if self.path.endswith('/quota'):
+                self.send_response(429); self.end_headers(); self.wfile.write(b'{"error":{"status":"RESOURCE_EXHAUSTED"}}'); return
+            if self.path.endswith('/slow'): time.sleep(3)
+            truncated = self.path.endswith('/truncated') or (self.path.endswith('/adaptive') and len(text) > 128)
+            output = text if self.path.endswith(('/echo', '/adaptive')) else 'Hello'
+            payload = {'candidates':[{'content':{'parts':[{'text':'Do not show this thought','thought':True},{'text':output}]},'finishReason':'MAX_TOKENS' if truncated else 'STOP'}]}
+            self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers()
+            try: self.wfile.write(json.dumps(payload).encode())
+            except BrokenPipeError: pass
+            return
         if self.path.startswith('/redirect'):
             self.send_response(307); self.send_header('Location', '/ok/chat/completions'); self.end_headers(); return
         if self.path.startswith('/unauthorized'):

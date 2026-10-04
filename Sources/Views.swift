@@ -35,7 +35,7 @@ struct MainView: View {
                         if replies.watching { replies.stop() } else { model.startReplyReading() }
                     }.controlSize(.mini).disabled(model.busy && !replies.watching)
                 }
-                Text(model.engine == "apple" ? "系统翻译" : "AI 翻译").font(.system(size: 10)).foregroundStyle(.secondary)
+                Text(model.engine == "apple" ? "系统翻译" : model.engine == "gemini" ? "Gemini" : "AI 翻译").font(.system(size: 10)).foregroundStyle(.secondary)
                     .padding(.horizontal, 7).padding(.vertical, 4)
                     .background(Color.primary.opacity(0.05), in: Capsule())
             }.padding(.horizontal, 20).padding(.vertical, 8)
@@ -223,65 +223,5 @@ struct ChatBubble: View {
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(item.isUser ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.08)))
         }
-    }
-}
-
-struct SettingsView: View {
-    @ObservedObject var model: TranslatorModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var engine = "apple"
-    @State private var baseURL = ""
-    @State private var aiModel = ""
-    @State private var key = ""
-    @State private var replaceKey = false
-    @State private var error = ""
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("翻译设置").font(.title2.bold())
-            Picker("翻译方式", selection: $engine) {
-                Text("系统翻译").tag("apple")
-                Text("AI 翻译").tag("ai")
-            }.pickerStyle(.segmented)
-            if engine == "apple" {
-                Label("无需 API 密钥", systemImage: "checkmark.seal").font(.headline)
-                Text("使用苹果系统翻译。可在主窗口选择英文、德文、日文或韩文，回复始终译回中文。首次使用某种语言可能需要下载语言包；发送前建议检查译文。")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
-            } else {
-                Text("使用支持 OpenAI 兼容格式的服务。你的中文和读取到的 Claude 回复会发送到该地址翻译；费用由该服务收取。")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("接口地址").font(.system(size: 12, weight: .medium))
-                    TextField("https://你的服务地址/v1", text: $baseURL).textFieldStyle(.roundedBorder)
-                }
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("模型名称").font(.system(size: 12, weight: .medium))
-                    TextField("填写服务提供的模型名称", text: $aiModel).textFieldStyle(.roundedBorder)
-                }
-                Toggle("新增或更换 API 密钥", isOn: $replaceKey)
-                if replaceKey {
-                    SecureField("API 密钥（留空将删除已存密钥）", text: $key).textFieldStyle(.roundedBorder)
-                }
-                Text("密钥保存在 macOS 钥匙串中，不写入配置文件。接口需支持 /chat/completions。")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-            Divider()
-            Text("唤出快捷键：Control + Option + E\n请先点击目标输入框，再使用快捷键。\n自动发送请按各软件设置选择「回车」或「⌘ + 回车」。")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
-            if !error.isEmpty { Text(error).foregroundStyle(.red).font(.system(size: 12)) }
-            HStack {
-                Button("取消") { dismiss() }
-                Spacer()
-                Button("保存设置") {
-                    let previous = (model.engine, model.baseURL, model.aiModel)
-                    model.engine = engine; model.baseURL = baseURL; model.aiModel = aiModel
-                    do { try model.saveSettings(key: key, replaceKey: replaceKey); dismiss() }
-                    catch {
-                        model.engine = previous.0; model.baseURL = previous.1; model.aiModel = previous.2
-                        self.error = error.localizedDescription
-                    }
-                }.buttonStyle(.borderedProminent)
-            }
-        }.padding(26).frame(width: 440)
-        .onAppear { engine = model.engine; baseURL = model.baseURL; aiModel = model.aiModel }
     }
 }

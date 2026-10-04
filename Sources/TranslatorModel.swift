@@ -52,7 +52,7 @@ final class TranslatorModel: ObservableObject {
     }
     func readVisibleReply() {
         guard let target else { return }
-        Task { await replies.readVisible(target: target, engine: engine, baseURL: baseURL, model: aiModel, language: language) }
+        Task { await replies.readVisible(target: target, engine: engine, baseURL: baseURL, model: activeAIModel, language: language) }
     }
     @Published var input = "" {
         didSet {
@@ -69,7 +69,7 @@ final class TranslatorModel: ObservableObject {
             guard language != oldValue else { return }
             UserDefaults.standard.set(language.rawValue, forKey: "targetLanguage")
             output = ""; configuration = nil
-            replies.configure(engine: engine, baseURL: baseURL, model: aiModel, language: language)
+            replies.configure(engine: engine, baseURL: baseURL, model: activeAIModel, language: language)
             report("已选择\(language.name)，Claude 的回复将译回中文。")
         }
     }
@@ -85,6 +85,8 @@ final class TranslatorModel: ObservableObject {
     @Published var engine = UserDefaults.standard.string(forKey: "engine") ?? "apple"
     @Published var baseURL = UserDefaults.standard.string(forKey: "baseURL") ?? ""
     @Published var aiModel = UserDefaults.standard.string(forKey: "aiModel") ?? ""
+    @Published var geminiModel = UserDefaults.standard.string(forKey: "geminiModel") ?? GeminiProtocol.defaultModel
+    var activeAIModel: String { engine == "gemini" ? geminiModel : aiModel }
     @Published var autoSend = UserDefaults.standard.bool(forKey: "autoSend") {
         didSet { UserDefaults.standard.set(autoSend, forKey: "autoSend") }
     }
@@ -98,6 +100,7 @@ final class TranslatorModel: ObservableObject {
     private var appleSession: TranslationSession?
     private var preparationWatchdog: Task<Void, Never>?
     private let applePreparationTimeout: Duration
+    private let remoteKeyRead: (RemoteTranslationProvider) throws -> String
     private var activeID: UUID?
     private var pending: Job?
     private struct Job {
@@ -112,8 +115,10 @@ final class TranslatorModel: ObservableObject {
 
     init(permissionCheck: @escaping @MainActor () -> Bool = { TargetBridge.trusted },
          permissionInterval: UInt64 = 1_000_000_000,
-         applePreparationTimeout: Duration = .seconds(120)) {
+         applePreparationTimeout: Duration = .seconds(120),
+         remoteKeyRead: @escaping (RemoteTranslationProvider) throws -> String = { try Credentials.read(for: $0) }) {
         self.applePreparationTimeout = applePreparationTimeout
+        self.remoteKeyRead = remoteKeyRead
         permission = permissionCheck()
         permissionMonitor = AccessibilityPermissionMonitor(check: permissionCheck, interval: permissionInterval)
         permissionMonitor.onChange = { [weak self] granted in
@@ -152,12 +157,19 @@ final class TranslatorModel: ObservableObject {
     func saveSettings(key: String, replaceKey: Bool) throws {
         if engine == "ai" {
             _ = try AIProtocol.request(text: "测试", baseURL: baseURL, model: aiModel, key: "")
+        } else if engine == "gemini" {
+            _ = try GeminiProtocol.endpoint(model: geminiModel)
+        } else if engine != "apple" {
+            throw BridgeError.message("翻译方式无效，请重新选择。")
         }
-        if replaceKey { try Credentials.save(key.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        if replaceKey, let provider = RemoteTranslationProvider(rawValue: engine) {
+            try Credentials.save(key.trimmingCharacters(in: .whitespacesAndNewlines), for: provider)
+        }
         UserDefaults.standard.set(engine, forKey: "engine")
         UserDefaults.standard.set(baseURL, forKey: "baseURL")
         UserDefaults.standard.set(aiModel, forKey: "aiModel")
-        replies.configure(engine: engine, baseURL: baseURL, model: aiModel, language: language)
+        UserDefaults.standard.set(geminiModel, forKey: "geminiModel")
+        replies.configure(engine: engine, baseURL: baseURL, model: activeAIModel, language: language)
         report("翻译设置已保存，下一次发送或读取将使用新设置。")
     }
     func begin(insert: Bool) {
@@ -167,24 +179,25 @@ final class TranslatorModel: ObservableObject {
             if insert && target == nil { throw BridgeError.message("请先点击目标聊天输入框，再按 ⌃⌥E；也可以先点「仅翻译」。") }
             let destination = insert ? try target.map { try TargetBridge.refresh($0) } : target
             let job = Job(id: UUID(), text: text, insert: insert, target: destination, send: autoSend, commandReturn: commandReturn, language: language)
-            let useAI = engine == "ai"
-            let key = useAI ? try Credentials.read() : ""
-            let base = baseURL; let model = aiModel
-            if useAI { _ = try AIProtocol.request(text: "测试", baseURL: base, model: model, key: key, direction: .fromChinese(job.language)) }
+            let provider = RemoteTranslationProvider(rawValue: engine)
+            guard engine == "apple" || provider != nil else { throw BridgeError.message("翻译方式无效，请重新选择。") }
+            let key = try provider.map { try remoteKeyRead($0) } ?? ""
+            let base = baseURL; let model = activeAIModel
+            if let provider { _ = try provider.request(text: "测试", baseURL: base, model: model, key: key, direction: .fromChinese(job.language)) }
             activeID = job.id; pending = job; busy = true; output = ""
             history.append(.init(id: job.id.uuidString, isUser: true, chinese: text, foreign: "", language: job.language))
             trimHistory()
             chatScrollTarget = "bottom"; chatScrollAtTop = false
             chatRevision += 1
             report(engine == "apple" ? "正在使用系统翻译… 首次使用可能需要下载语言包。" : "正在翻译…")
-            if useAI {
+            if let provider {
                 task = Task {
                     do {
                         let result = try await TextTranslation.run(text, progress: { [weak self] part, total in
                             self?.report("正在翻译为\(job.language.name)… \(part) / \(total) 段")
                         }) { chunk in
-                            let request = try AIProtocol.request(text: chunk, baseURL: base, model: model, key: key, direction: .fromChinese(job.language))
-                            return try await AITranslator.translate(request)
+                            let request = try provider.request(text: chunk, baseURL: base, model: model, key: key, direction: .fromChinese(job.language))
+                            return try await AITranslator.translate(request, provider: provider)
                         }
                         try await finish(result, job: job)
                     } catch { failed(error, id: job.id) }
@@ -280,7 +293,7 @@ final class TranslatorModel: ObservableObject {
     }
     func startReplyReading() {
         guard !busy, let target else { report("请先点击 Claude 输入框，再按 ⌃⌥E。", error: true); return }
-        Task { await replies.connect(target: target, engine: engine, baseURL: baseURL, model: aiModel, language: language) }
+        Task { await replies.connect(target: target, engine: engine, baseURL: baseURL, model: activeAIModel, language: language) }
     }
     func copyOutput() {
         guard !output.isEmpty else { return }

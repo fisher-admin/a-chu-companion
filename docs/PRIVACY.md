@@ -10,6 +10,8 @@
 
 **可选 AI 翻译**：中文草稿和读取的外语回复发送至用户配置的 OpenAI 兼容服务，包含内容本身；该服务决定保存、费用及处理规则。密钥在 macOS 钥匙串，本项目不代理该服务。
 
+**可选 Gemini 翻译**：选择后，中文草稿与读取的外语回复直接发送至 `generativelanguage.googleapis.com`，使用 Google 原生接口；仅向固定官方 HTTPS 地址发送密钥请求头，不接受重定向。Gemini 密钥使用独立钥匙串条目，保留原有 AI 服务密钥；不将密钥写入偏好、日志、仓库或 URL。Google 决定数据处理和费用；免费层有项目限额，内容可能用于改进 Google 产品，已开启结算的项目可能收费。程序不会自动切换到另一个付费模型或服务。测试连接只发送界面说明的两句固定测试文字，不读取草稿或 Claude 对话，不保存未提交的密钥；保存设置才更新该服务的钥匙串条目。
+
 **Claude 额度**：可以读取当前桌面登录或保存指定 session。指定凭据在本程序钥匙串；桌面 Cookie 数据库留在 Claude 原目录，读取不修改它。首次桌面连接可能请求读取 Claude Safe Storage；后台自动查询禁止重复弹出授权。查询只向 claude.ai 发只读组织／额度请求，携带相应会话凭据，不发送聊天正文、不调用模型、不统计 API 计费。网页／桌面不同账户需用户连接对应来源。
 
 **偏好与签名**：语言、字号、发送方式和服务地址等偏好保存在本机。安装脚本在用户钥匙串创建／复用不可导出的本机签名私钥，签名配置留在应用支持目录。它们不随仓库发布，不改变系统证书信任，不是 Apple 公证。
@@ -23,6 +25,8 @@ Accessibility is used for the bound Claude conversation and composer, not to col
 Delivery temporarily uses the clipboard and restores it when it still belongs to the operation. The target and pasted text are checked before the configured send key is attempted. Auto-send is optional; a successful keypress is not proof of server receipt.
 
 Default translation uses Apple Translation without a translation API key. Initial packs may download, installed packs are reused, and processing follows macOS system translation behavior. Optional AI translation sends drafts and foreign replies to the configured provider, whose retention, pricing, and processing policies apply. Keys live in Keychain; the project does not proxy that service.
+
+Selecting Gemini sends drafts and foreign replies directly to `generativelanguage.googleapis.com` using Google's native API. The key is sent only as a header to the fixed official HTTPS host; redirects are refused. Gemini uses a separate Keychain item, preserving the existing AI-service key. Keys are not written to preferences, logs, Git, or URLs. Google's data and pricing policies apply: the free tier has project limits, content may improve Google products, and billing-enabled projects may incur charges. The app does not automatically switch to another paid model or service. Test Connection sends only the two fixed synthetic sentences described in the UI, without drafts or Claude conversations, and does not save an unsubmitted key. Saving settings updates only the selected provider's Keychain item.
 
 Usage can use the current desktop login or a supplied session. Supplied credentials are stored in this app's Keychain item. The desktop cookie database remains in Claude's directory and is not modified. First connection may ask to read Claude Safe Storage; automatic refresh does not repeatedly request authorization. Read-only organization/usage requests go to claude.ai with session credentials, without chat text or model calls. API billing is out of scope. Different browser/desktop accounts require the appropriate usage source.
 

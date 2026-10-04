@@ -4,6 +4,14 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.6 — 2026-10-04 — build 32
+
+- Add a separate Gemini translation choice using Google's native `generateContent` API, with `gemini-3.1-flash-lite` pinned by default. Both message translation and Chinese reply translation use the selected provider. / 新增独立 Gemini 翻译，直接使用 Google 原生接口，默认固定 Gemini 3.1 Flash-Lite；中文发送和回复回译共用配置。
+- Preserve system translation and OpenAI-compatible profiles. Store the Gemini key in its own Keychain item, and persist the provider/model across restarts and normal updates. / 保留系统翻译及原有 AI 配置，Gemini 密钥独立存入钥匙串，翻译方式和模型支持重启及正常升级记忆。
+- Add a cancellable connection check using two fixed synthetic sentences, without accessing chat content or saving an unsubmitted key. / 增加可取消的双向连接测试，仅用两句固定文字，不读取聊天或保存未提交的密钥。
+- Explain project quotas, billing, free-tier data use, and credential errors. Reject incomplete/blocked translations; retry truncated long chunks at smaller sizes while preserving original text and existing limits. / 提示项目额度、费用、免费层数据规则及凭据错误；拒绝不完整或受限译文，长文截断自动缩段重试，保留原文和原有长度限制。
+- Add twenty-two application regressions and seven loopback HTTP checks, for totals of 213 and 14. Preserve the existing signing identity and all earlier history; native/live evidence is recorded separately in TEST_PLAN. / 新增二十二项应用回归和七项本机 HTTP，合计 213／14 项；保留原签名及全部历史，界面和真实接口证据单独记录在 TEST_PLAN。
+
 ## 1.1.5 — 2026-10-04 — builds 29–31
 
 - Recognize Claude Desktop Code session routes instead of pausing as though the conversation had closed. / 识别 Claude 桌面 Code 会话地址，修复误判页面关闭后停止读取。

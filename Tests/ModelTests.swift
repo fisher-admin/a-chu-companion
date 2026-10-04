@@ -4,12 +4,28 @@ import AppKit
 @main struct ModelTests {
     @MainActor static func main() async throws {
         _ = NSApplication.shared
-        let settings = ["targetLanguage", "replyTextSize", "engine", "baseURL", "aiModel"].map { ($0, UserDefaults.standard.object(forKey: $0)) }
+        let settings = ["targetLanguage", "replyTextSize", "engine", "baseURL", "aiModel", "geminiModel"].map { ($0, UserDefaults.standard.object(forKey: $0)) }
         defer { for (key, value) in settings { UserDefaults.standard.set(value, forKey: key) } }
         UserDefaults.standard.set("en", forKey: "targetLanguage")
         UserDefaults.standard.removeObject(forKey: "replyTextSize")
-        let model = TranslatorModel(permissionCheck: { true }, applePreparationTimeout: .milliseconds(20))
+        UserDefaults.standard.removeObject(forKey: "geminiModel")
+        let model = TranslatorModel(permissionCheck: { true }, applePreparationTimeout: .milliseconds(20), remoteKeyRead: { _ in "" })
         defer { model.cancel(); model.stopPermissionMonitoring() }
+        precondition(model.geminiModel == "gemini-3.1-flash-lite")
+        let oldService = (model.baseURL, model.aiModel)
+        model.input = "保留这份配置草稿"
+        model.engine = "gemini"; model.geminiModel = "gemini-3.1-flash-lite"
+        try model.saveSettings(key: "", replaceKey: false)
+        precondition(model.activeAIModel == "gemini-3.1-flash-lite" && model.baseURL == oldService.0 && model.aiModel == oldService.1 && model.input == "保留这份配置草稿")
+        print("PASS: Gemini selection preserves the other service profile and Chinese draft")
+        let restoredProvider = TranslatorModel(permissionCheck: { true }, remoteKeyRead: { _ in "" })
+        precondition(restoredProvider.engine == "gemini" && restoredProvider.geminiModel == model.geminiModel)
+        restoredProvider.stopPermissionMonitoring()
+        print("PASS: Gemini provider and pinned model survive model recreation")
+        model.begin(insert: false)
+        precondition(!model.busy && model.isError && model.history.isEmpty && model.input == "保留这份配置草稿" && model.status.contains("Gemini"))
+        print("PASS: missing Gemini key blocks translation before networking or delivery and preserves the draft")
+        model.engine = "apple"
         precondition(model.replyTextSize == .medium && model.replyTextSize.rawValue == 14)
         model.replyTextSize = .large
         model.engine = "apple"
@@ -104,7 +120,7 @@ import AppKit
         precondition(fresh.history.isEmpty && fresh.language == .german && fresh.replyTextSize == .large)
         fresh.stopPermissionMonitoring()
         print("PASS: a new application restores language and font size but has no persisted chat records")
-        print("16 multilingual model tests passed")
+        print("19 multilingual model tests passed")
     }
 
     @MainActor static func waitUntil(_ condition: () -> Bool) async throws {
