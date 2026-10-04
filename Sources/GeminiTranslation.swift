@@ -43,7 +43,17 @@ enum GeminiProtocol {
             if status == 413 { throw TranslationChunkError.tooLarge }
             let detail: String
             switch status {
-            case 400, 401, 403: detail = "请检查 API 密钥、模型及项目访问权限。"
+            case 400, 401: detail = "请检查 API 密钥、模型及项目访问权限。"
+            case 403:
+                let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                let message = (body?["error"] as? [String: Any])?["message"] as? String ?? ""
+                // Recognize this fixed category without displaying remote text,
+                // which may contain credentials or project identifiers.
+                if message.lowercased().contains("project has been denied access") {
+                    detail = "Google 已拒绝该项目访问 Gemini API。请在 Google AI Studio 核对项目状态，并联系 Google 支持处理；原文已保留。"
+                } else {
+                    detail = "访问被拒绝，请检查项目权限、API 密钥限制及模型访问权限；密钥正确也可能发生此错误。"
+                }
             case 404: detail = "找不到此模型，请检查模型名称及项目可用模型。"
             case 429: detail = "项目额度用尽或请求过于频繁，请稍后重试，或查看 Google AI Studio 的项目限额。"
             default: detail = "服务暂时不可用，请稍后重试。"

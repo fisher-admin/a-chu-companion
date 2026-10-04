@@ -106,7 +106,7 @@ python3 Tools/check_repository.py --history
 
 GitHub CI performs repository checks, offline regressions, loopback HTTP tests, and certificate-free builds. CodeQL analyzes Swift, Python, and Actions workflows. It does not sign into Claude, send real messages, or install language packs. Language, identity, and actual Claude tests run separately; see [Contributing](CONTRIBUTING.md) and [Verification records](TEST_PLAN.md).
 
-The current app has 213 regression checks plus fourteen loopback HTTP checks, including Gemini bidirectional requests, credential separation, failure feedback, and adaptive long-text retries. Native validation covers continuous replies, slow responses, background reading, history selection, stop/resume, preferences, and replies approaching 50,000 characters. Actual Google calls and Desktop Code-mode checks are recorded separately in the verification document; terminal CLI chat is outside the supported scope. Untested browser/OS combinations are not presented as verified.
+The current app has 215 regression checks plus fourteen loopback HTTP checks, including Gemini bidirectional requests, credential separation, failure feedback, and adaptive long-text retries. Native validation covers continuous replies, slow responses, background reading, history selection, stop/resume, preferences, and replies approaching 50,000 characters. Actual Google calls and Desktop Code-mode checks are recorded separately in the verification document; terminal CLI chat is outside the supported scope. Untested browser/OS combinations are not presented as verified.
 
 ## Community and license
 

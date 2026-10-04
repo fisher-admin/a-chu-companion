@@ -40,7 +40,8 @@ curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-l
 
 官方为该模型列出有限免费层，但项目实际请求数、token 限额和费用取决于项目层级。开启结算的项目可能收费；程序不控制 Google 的结算状态，也不保证所有调用免费。免费层内容可能用于改进 Google 产品。参见 [官方定价](https://ai.google.dev/gemini-api/docs/pricing) 和 [限额说明](https://ai.google.dev/gemini-api/docs/rate-limits)。
 
-- 400／401／403：核对 key、模型及项目访问权限；浏览器专用的 key 限制可能不适用于桌面调用。
+- 400／401：核对 key、模型及项目访问权限。
+- 403：密钥正确也可能被拒绝。若提示「Google 已拒绝该项目访问」，说明官方明确拒绝 key 所属项目，请在 [AI Studio 项目页](https://aistudio.google.com/projects) 核对项目状态并联系 Google 支持；程序不会通过改模型或反复重试绕开项目权限。其他 403 可检查项目权限、API 限制及网页／IP 等来源限制；浏览器专用限制可能不适用于桌面调用。
 - 404：核对当前项目可用模型及名称。
 - 429：项目额度用尽或请求过快；查看 AI Studio 项目限额后再重试。
 - 网络失败：检查连接后重试，原文保留。伴侣不会把 Google 原始错误正文中的潜在敏感信息显示出来。
@@ -55,7 +56,7 @@ An unchecked key-update option retains that provider's stored key. Checking it a
 
 The app uses translation-only instructions, preserves originals on errors, and requires completed usable output. Long text is split and retried with smaller chunks when truncated. Existing 10,000-character Chinese input and 50,000-character foreign-text limits remain. Translation quality, including code fidelity, should be reviewed before use.
 
-Google lists a limited free tier for this model. Actual quotas and charges depend on the project; billing-enabled projects may incur charges, and free-tier content may improve Google products. The app does not change billing settings or guarantee free calls. Check [pricing](https://ai.google.dev/gemini-api/docs/pricing) and [project rate limits](https://ai.google.dev/gemini-api/docs/rate-limits). For 400/401/403 check the key, model, and project access; for 404 check model availability; for 429 check project quotas and retry later. Network failures retain the original. Raw remote error bodies are not surfaced to avoid disclosing sensitive details.
+Google lists a limited free tier for this model. Actual quotas and charges depend on the project; billing-enabled projects may incur charges, and free-tier content may improve Google products. The app does not change billing settings or guarantee free calls. Check [pricing](https://ai.google.dev/gemini-api/docs/pricing) and [project rate limits](https://ai.google.dev/gemini-api/docs/rate-limits). For 400/401 check the key, model, and project access. A 403 can occur with a correct key: if Google explicitly denies the project, check the [AI Studio project page](https://aistudio.google.com/projects) and contact Google support. The app cannot restore project access or bypass it by switching models/retrying. Other 403 errors can involve project permission, API restrictions, or website/IP origin restrictions. For 404 check model availability; for 429 check project quotas and retry later. Network failures retain the original. Raw remote error bodies are not surfaced to avoid disclosing sensitive details.
 
 ## Official references / 官方参考
 

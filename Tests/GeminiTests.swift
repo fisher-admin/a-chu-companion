@@ -51,6 +51,14 @@ import Foundation
                 check(message.contains("Gemini") && !message.contains("dummy-key") && !message.contains("PRIVATE INPUT"), "HTTP \(status) has safe feedback")
             }
         }
+        let denied = try JSONSerialization.data(withJSONObject: ["error": ["status": "PERMISSION_DENIED", "message": "Your project has been denied access. Please contact support. dummy-key PRIVATE INPUT", "details": [["metadata": ["consumer": "projects/1234567890"]]]]])
+        do { _ = try GeminiProtocol.response(denied, status: 403); check(false, "project denial must explain Google's project restriction") }
+        catch {
+            let message = error.localizedDescription
+            check(message.contains("Google") && message.contains("项目") && message.contains("拒绝") && message.contains("支持") && message.contains("原文") && !message.contains("请检查 API 密钥") && !message.contains("dummy-key") && !message.contains("PRIVATE INPUT") && !message.contains("1234567890"), "project denial explains the project restriction without blaming or exposing the key")
+        }
+        do { _ = try GeminiProtocol.response(denied, status: 500); check(false, "project denial classification must respect the HTTP status") }
+        catch { check(!error.localizedDescription.contains("项目状态") && error.localizedDescription.contains("服务暂时不可用"), "a project-like remote message cannot override an unrelated server status") }
         let old = try RemoteTranslationProvider.openAI.request(text: "你好", baseURL: "https://example.org/v1", model: "existing", key: "dummy-old-key", direction: .fromChinese(.english))
         check(old.url?.path == "/v1/chat/completions" && old.value(forHTTPHeaderField: "Authorization") == "Bearer dummy-old-key" && old.value(forHTTPHeaderField: "X-goog-api-key") == nil, "existing compatible services keep their original protocol")
         print("\(count) Gemini tests passed")

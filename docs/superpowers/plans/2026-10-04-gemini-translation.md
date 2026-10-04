@@ -30,9 +30,12 @@
 - [x] Reset typed keys when switching provider; retire tests on field changes or dismissal. Saving retains unrelated provider preferences/keys and rolls back on failure.
 - [ ] Verify the installed sheet visually, provider switching, test feedback and preference persistence. User enters the real key locally for live Google verification.
 
+Installed build32/33 settings and persisted provider/model/key were verified. Native live checks with the user-entered key return Google's explicit project-access denial (403 PERMISSION_DENIED), so successful bidirectional Google translation remains blocked by project access. Build33 safely classifies that denial without revealing remote text; no project permission, credential restriction, or billing changes were made.
+
 ## 4. Delivery and evidence
 
 - [x] Run `./test.sh`, `./test-http.sh`, repository unit/history checks, `python3 Tests/SigningTests.py`, and `./build.sh --unsigned`. Use normal host permissions for local sockets, icon rendering and the existing signing key.
 - [x] Install 1.1.6 build32 with the existing signer; do not renew authorization or replace the signing identity.
 - [x] Record actual native/live results separately in TEST_PLAN.md, preserve old entries, and update bilingual README/CHANGELOG plus corrected curl example.
-- [ ] Check staged files and Git history for credential patterns, commit/push only source/tests/docs, and create an attached update draft. Never include API keys or private chat contents.
+- [x] Check staged files and Git history for credential patterns and commit only source/tests/docs. Never include API keys or private chat contents.
+- [ ] Push and create an attached update draft. GitHub CLI and Git HTTPS connections are reset by the current host network; local verified commits are retained.
