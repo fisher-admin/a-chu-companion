@@ -126,7 +126,7 @@ final class ClaudeSource: @unchecked Sendable {
         guard AXIsProcessTrusted() else { throw BridgeError.message("辅助功能权限已关闭，自动读取已停止。") }
         try refreshRoot()
         let conversation = Self.urlString(root)
-        guard fixture || (URL(string: conversation)?.host == "claude.ai" && (URL(string: conversation)?.path.hasPrefix("/chat/") == true || ["/new", "/"].contains(URL(string: conversation)?.path ?? ""))) else {
+        guard let format = ClaudeConversationPage.format(conversation) ?? (fixture ? .chat : nil) else {
             throw BridgeError.message("Claude 对话页面已关闭或切换，自动读取已停止。")
         }
         let metadata = [kAXRoleAttribute, kAXDescriptionAttribute, kAXTitleAttribute, kAXChildrenAttribute] as CFArray
@@ -155,7 +155,11 @@ final class ClaudeSource: @unchecked Sendable {
             }
             let role = values[0] as? String ?? ""
             let description = values[1] as? String ?? ""
-            let label = description.isEmpty ? (values[2] as? String ?? "") : description
+            let title = values[2] as? String ?? ""
+            var label = description.isEmpty ? title : description
+            if format == .code, let ordinal = try ClaudeDecoder.codePosition(role: role, description: description, title: title) {
+                label = "Message \(ordinal)"
+            }
             return (role, label, values[3] as? [AXUIElement] ?? [])
         }
         func findTranscript(_ element: AXUIElement, depth: Int) async throws -> AXUIElement? {
@@ -182,7 +186,7 @@ final class ClaudeSource: @unchecked Sendable {
         }
         try await generationStatus(root, depth: 0)
         guard let region = try await findTranscript(root, depth: 0) else {
-            if !fixture && URL(string: conversation)?.path.hasPrefix("/chat/") == true { throw ReplyReadPending(message: "Claude 消息区尚未就绪。") }
+            if !fixture && !["/new", "/", ""].contains(URL(string: conversation)?.path ?? "") { throw ReplyReadPending(message: "Claude 消息区尚未就绪。") }
             return ReplySnapshot(conversation: conversation, messages: [], foundTranscript: false, responseComplete: false)
         }
         var viewport: CGRect?
@@ -203,21 +207,41 @@ final class ClaudeSource: @unchecked Sendable {
             }
             viewport = bounds
         }
-        var elements: [(ordinal: Int, total: Int, element: AXUIElement)] = []
+        var elements: [(ordinal: Int, total: Int, members: [AXUIElement])] = []
         func newest(_ element: AXUIElement, depth: Int) async throws {
             guard elements.count < (visibleOnly ? 100 : 8) else { return }
             let (role, label, children) = try await info(element, depth: depth)
-            let words = label.split(separator: " ")
-            if words.count == 4, words[0] == "Message", words[2] == "of", let ordinal = Int(words[1]), let total = Int(words[3]) {
+            if let position = ClaudeDecoder.position(label, format: .chat), let total = position.total {
                 if let viewport {
                     guard let frame = Self.frame(element), VisibleReplyGeometry.intersects(frame, viewport: viewport) else { return }
                 }
-                elements.append((ordinal, total, element)); return
+                elements.append((position.ordinal, total, [element])); return
             }
             guard !skipRoles.contains(role) else { return }
             for child in children.reversed() { try await newest(child, depth: depth + 1) }
         }
-        try await newest(region, depth: 0)
+        if format == .code {
+            func branch(_ element: AXUIElement, depth: Int) async throws -> CodeTranscriptBranch<AXUIElement> {
+                let (role, label, children) = try await info(element, depth: depth)
+                let ordinal = role == "AXGroup" ? ClaudeDecoder.position(label, format: .code)?.ordinal : nil
+                var nested: [CodeTranscriptBranch<AXUIElement>] = []
+                if !skipRoles.contains(role) {
+                    for child in children { nested.append(try await branch(child, depth: depth + 1)) }
+                }
+                return .init(element: element, ordinal: ordinal, children: nested)
+            }
+            let pieces = ClaudeDecoder.codeTranscriptPieces(try await branch(region, depth: 0))
+            let ranges = try ClaudeDecoder.codeMessageRanges(pieces.map { $0.ordinal.map { "Message \($0)" } ?? "" })
+            if let latest = ranges.last {
+                for group in ranges.suffix(visibleOnly ? 100 : 8) {
+                    let members = pieces[group.range].map(\.element)
+                    if let viewport, !members.contains(where: { member in
+                        Self.frame(member).map { VisibleReplyGeometry.intersects($0, viewport: viewport) } ?? false
+                    }) { continue }
+                    elements.append((group.ordinal, latest.ordinal, members))
+                }
+            }
+        } else { try await newest(region, depth: 0) }
         elements.sort { $0.ordinal < $1.ordinal }
         if let latest = elements.last {
             guard (visibleOnly || latest.ordinal == latest.total), Set(elements.map(\.ordinal)).count == elements.count,
@@ -237,29 +261,42 @@ final class ClaudeSource: @unchecked Sendable {
             // No page-wide text reads and no character cap; only complete bodies
             // of the most recent, author-marked messages are retained.
             var text = ""
-            if ["AXStaticText", "AXListMarker"].contains(role) {
+            if ["AXStaticText", "AXListMarker", "AXHeading"].contains(role) {
                 var value: CFTypeRef?
                 let result = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value)
                 guard result == .success || result == .attributeUnsupported || result == .noValue else {
                     throw ReplyReadPending(message: "消息文字尚未完整返回，已丢弃本次读取。")
                 }
                 text = value as? String ?? ""
+                if role == "AXHeading", !text.hasPrefix("Claude responded:"), !text.hasPrefix("You said:") {
+                    text = Self.attribute(element, kAXTitleAttribute) as? String ?? text
+                }
             }
             var nodes: [ReplyNode] = []
             for child in children { nodes.append(try await read(child, depth: depth + 1)) }
             return ReplyNode(role: role, label: label, text: text, children: nodes)
         }
         var nodes: [ReplyNode] = []
-        for element in elements { nodes.append(try await read(element.element, depth: 0)) }
+        for element in elements {
+            if format == .code {
+                var members: [ReplyNode] = []
+                for member in element.members { members.append(try await read(member, depth: 0)) }
+                nodes.append(ReplyNode(role: "AXGroup", label: "Message \(element.ordinal)", children: members))
+            } else { nodes.append(try await read(element.members[0], depth: 0)) }
+        }
         try Task.checkCancellation()
         guard isInCurrentWindow(), Self.urlString(root) == conversation else { throw ReplyReadPending(message: "读取期间会话已更新，本次内容已丢弃。") }
-        let complete = ClaudeDecoder.responseComplete(statusLabels: statusLabels, controlLabels: controlLabels, latest: nodes.last)
+        let complete = ClaudeDecoder.responseComplete(statusLabels: statusLabels, controlLabels: controlLabels, latest: nodes.last, format: format)
         let messages: [ChatMessage]
         if visibleOnly {
             messages = zip(nodes, elements).flatMap { node, element in
-                ClaudeDecoder.messages(node).filter { $0.author == .assistant && (element.ordinal < element.total || complete) }
+                let finished = element.ordinal < element.total || complete
+                let decoded = format == .code ? ClaudeDecoder.codeSegments(node, responseComplete: finished) : ClaudeDecoder.messages(node)
+                return decoded.filter { $0.author == .assistant && ($0.completed ?? finished) }
             }
-        } else { messages = try ClaudeDecoder.recentMessages(nodes) }
+        } else {
+            messages = format == .code ? try ClaudeDecoder.recentCodeSegments(nodes, responseComplete: complete) : try ClaudeDecoder.recentMessages(nodes)
+        }
         return ReplySnapshot(conversation: conversation, messages: messages, foundTranscript: true, responseComplete: complete)
     }
 }

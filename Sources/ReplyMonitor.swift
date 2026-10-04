@@ -101,7 +101,7 @@ import Translation
                     }
                     self.continueReplies()
                     if !self.translating && !snapshot.responseComplete {
-                        self.status = "Claude 正在运行，等待完整正式回复…"
+                        self.status = snapshot.messages.contains(where: { $0.segment > 0 }) ? "Claude 正在运行，正式分段稳定后即译成中文，继续读取…" : "Claude 正在运行，等待完整正式回复…"
                     }
                 } catch {
                     guard self.sessionID == token else { return }
@@ -125,7 +125,7 @@ import Translation
             guard historyRequestID == request else { return }
             historyRequestID = nil
             historyChoices = snapshot.messages.map {
-                ReplyWork(candidate: ReplyCandidate(ordinal: $0.ordinal, text: $0.text), conversation: snapshot.conversation, manual: true)
+                ReplyWork(candidate: ReplyCandidate(ordinal: $0.ordinal, text: $0.text, segment: $0.segment), conversation: snapshot.conversation, manual: true)
             }
             if historyChoices.count == 1 { selectHistoryReply(historyChoices[0]) }
             else if historyChoices.isEmpty { status = "没有找到可见的完整正式回复，请在 Claude 中滚动到要翻译的消息。" }
@@ -159,7 +159,7 @@ import Translation
         return manualVersion || (tracker?.conversation == versionConversation && tracker?.isCurrent(candidate) == true)
     }
     private func replyID(_ candidate: ReplyCandidate) -> String {
-        ReplyIdentity.id(conversation: versionConversation, ordinal: candidate.ordinal)
+        ReplyIdentity.id(conversation: versionConversation, ordinal: candidate.ordinal, segment: candidate.segment)
     }
     func handleReadFailure(_ error: Error) {
         if let pending = error as? ReplyReadPending {
