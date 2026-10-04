@@ -4,6 +4,16 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.5 — 2026-10-04 — builds 29–31
+
+- Recognize Claude Desktop Code session routes instead of pausing as though the conversation had closed. / 识别 Claude 桌面 Code 会话地址，修复误判页面关闭后停止读取。
+- Collect Code replies across ordinal markers and sibling paragraphs, keeping final text and code while excluding tool cards and actions. / 按消息边界合并 Code 分段正文，保留末尾及代码，排除工具卡片和按钮。
+- Active work indicators take precedence over a stale completion indicator; temporary incomplete Code snapshots continue waiting. / 正在运行的状态优先于旧完成提示，Code 暂时不完整时继续等待。
+- Add seventeen sanitized Code regressions and a separate local Code fixture with twelve-second work pauses. / 新增十七项不含私人对话的 Code 回归及带十二秒等待的本机测试窗口。
+- Build 30 translates each completed formal Code segment into a separate record while tools continue running; streaming tails wait, and segment identities preserve earlier translation jobs. Twelve additional segment checks cover timely acquisition, duplicate prevention and the total reply limit. / build30 在工具运行期间及时读取已完成正式分段，每段独立记录，未完成段落继续等待；分段身份避免取消前一段任务，新增十二项回归并保持整条原文上限。
+- Build 31 starts translating formal Code text after three seconds without changes, even without another tool event or overall completion. Resumed streaming replaces the same segment after it settles; five more regressions cover this timing and prevent duplicate final records. The local fixture now waits thirty-six seconds to verify early display. / build31 正式 Code 正文稳定三秒后即开始翻译，不再等待下一工具事件或整轮结束；续写稳定后更新同一分段，新增五项时机及防重复检查，本机夹具延长为三十六秒以核对提前显示。
+- Keep the existing signing identity and all earlier history. Native verification and outstanding cases are recorded in TEST_PLAN. / 保留原签名及全部旧历史，实际验收与待验证项见 TEST_PLAN。
+
 ## 1.1.4 — 2026-10-03 — build 28
 
 ### Added / 新增

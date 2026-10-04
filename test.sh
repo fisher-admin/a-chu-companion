@@ -10,6 +10,10 @@ swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swif
 .build/reply-tests
 swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swift Sources/ReplyCore.swift Sources/ConversationReplyTracker.swift Sources/ReplyWorkQueue.swift Tests/ConversationReplyTests.swift -o .build/conversation-tests
 .build/conversation-tests
+swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swift Sources/ReplyCore.swift Sources/ConversationReplyTracker.swift Tests/CodeReplyTests.swift -o .build/code-reply-tests
+.build/code-reply-tests
+swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swift Sources/ReplyCore.swift Sources/ConversationReplyTracker.swift Sources/ReplyWorkQueue.swift Tests/CodeSegmentTests.swift -o .build/code-segment-tests
+.build/code-segment-tests
 swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/AccessibilityPermissionMonitor.swift Sources/Core.swift Sources/ReplyCore.swift Sources/ConversationReplyTracker.swift Sources/ReplyWorkQueue.swift Sources/ClaudeAccessibility.swift Sources/TargetBridge.swift Sources/Credentials.swift Sources/ReplyMonitor.swift Sources/TranslatorModel.swift Sources/ReaderPreferences.swift Sources/TextTranslation.swift Tests/PermissionTests.swift -o .build/permission-tests
 .build/permission-tests
 

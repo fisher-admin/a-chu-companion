@@ -23,6 +23,7 @@ This is an independent community project, not an Anthropic or official Claude pr
 - **Long-response reading:** New translations open at the beginning, with scrolling and expandable originals. Chinese text sizes are 12, 14, and 16; default 14. Language and text-size preferences persist.
 - **Temporary history:** Keep the latest ten completed reply translations during this run; clear on exit. Clearing records preserves drafts, the Claude conversation, and monitoring.
 - **Account usage:** Progress bars, used percentages, and reset times for reported five-hour and weekly limits. Refresh when replies are acquired. Use the desktop login or a specified session; missing data is not shown as zero.
+- **Code segments:** Formal text starts translating after about three seconds without changes, before another tool event or overall completion. A stable continuation updates its existing segment. Tool progress and output are excluded. Each segment counts toward the ten recent translation records.
 - **Native appearance:** A pig-head menu icon with a capital A, translucent materials following system appearance, and compact controls.
 
 ## Requirements and scope
@@ -31,7 +32,7 @@ This is an independent community project, not an Anthropic or official Claude pr
 | --- | --- |
 | Hardware | Apple Silicon Mac; current build script targets arm64 |
 | macOS | Minimum deployment target 15; mainly tested on 26 |
-| Chat clients | Claude Desktop and claude.ai in Chrome |
+| Chat clients | Claude Desktop (Chat and Code modes) and claude.ai in Chrome |
 | Translation | macOS system translation; optional configured OpenAI-compatible service |
 | Permissions | Accessibility for insertion and reading; possible Keychain authorization for desktop usage |
 | Chinese input | Up to 10,000 characters, including punctuation and line breaks |
@@ -98,7 +99,7 @@ python3 Tools/check_repository.py --history
 
 GitHub CI performs repository checks, offline regressions, loopback HTTP tests, and certificate-free builds. CodeQL analyzes Swift, Python, and Actions workflows. It does not sign into Claude, send real messages, or install language packs. Language, identity, and actual Claude tests run separately; see [Contributing](CONTRIBUTING.md) and [Verification records](TEST_PLAN.md).
 
-The current app has 157 regression checks plus seven loopback HTTP checks. Native validation covers continuous replies, slow responses, background reading, history selection, stop/resume, preferences, and replies approaching 50,000 characters. Untested browser/OS combinations are not presented as verified.
+The current app has 191 regression checks plus seven loopback HTTP checks. Native validation covers continuous replies, slow responses, background reading, history selection, stop/resume, preferences, and replies approaching 50,000 characters. Local and real Desktop Code-mode checks are recorded separately in the verification document; terminal CLI chat is outside the supported scope. Untested browser/OS combinations are not presented as verified.
 
 ## Community and license
 

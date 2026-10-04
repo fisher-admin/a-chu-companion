@@ -184,7 +184,7 @@ struct VisibleReplyPicker: View {
                     ForEach(replies.historyChoices) { work in
                         Button { replies.selectHistoryReply(work) } label: {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("Claude · 第 \(work.candidate.ordinal) 条消息").font(.system(size: 11, weight: .semibold))
+                                Text("Claude · 第 \(work.candidate.ordinal) 条消息" + (work.candidate.segment > 0 ? " · 分段 \(work.candidate.segment)" : "")).font(.system(size: 11, weight: .semibold))
                                 Text(String(work.candidate.text.prefix(500))).font(.system(size: 13)).lineLimit(4)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
