@@ -23,5 +23,5 @@ if [[ ! -s "$port_file" ]]; then
   cat "$server_log" >&2
   exit 1
 fi
-swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swift Sources/GeminiTranslation.swift Sources/TextTranslation.swift Sources/TranslationStructure.swift Sources/MarkdownTable.swift Tests/HTTPTests.swift -o .build/http-tests
+swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swift Sources/GeminiTranslation.swift Sources/TextTranslation.swift Sources/TranslationFidelity.swift Sources/TranslationStructure.swift Sources/MarkdownTable.swift Tests/HTTPTests.swift -o .build/http-tests
 .build/http-tests "http://127.0.0.1:$(cat "$port_file")"

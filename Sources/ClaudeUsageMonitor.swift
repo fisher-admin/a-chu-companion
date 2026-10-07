@@ -97,6 +97,7 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
     private var failures = 0
     private var requested = false
     private var retryAfter = Date.distantPast
+    private var lastFailure: String?
     private let load: @Sendable (Source, Bool) throws -> ClaudeSession
     private let fetch: @Sendable (ClaudeSession) async throws -> (ClaudeUsageSnapshot, ClaudePlan)
     private struct VisibleConnection: Codable {
@@ -114,6 +115,10 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
     private var automaticRetry: Task<Void, Never>?
     private var invalidVisibleConnection = false
     private var following = false
+    @Published private(set) var awaitingEntrance = false
+    private var replyRefresh: Task<Void, Never>?
+    private var periodic: Task<Void, Never>?
+    var replyRefreshDelay: Duration = .seconds(3)
     private var followingURL: String?
     private var acquisitionTask: Task<Void, Never>?
     private var acquisitionChannel: ClaudeUsageChannel?
@@ -132,6 +137,41 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         evidenceBinding = binding; evidenceSignature = ""
         visibleConnection = .init(source: source.rawValue, account: "自动跟随聊天来源", binding: binding.isEmpty ? "awaiting-source" : binding)
         status = "聊天已连接，正在自动核对对应账户和额度"
+    }
+    /// No verified Claude chat entrance is connected (startup, or a composer in
+    /// another application). Show no quota rather than guess another channel's
+    /// account; saved source settings stay for the next real connection.
+    func awaitChatEntrance(_ message: String = "连接 Claude 聊天后，显示该入口当前登录账户的额度") {
+        stop(); replyRefresh?.cancel(); replyRefresh = nil
+        following = false; followingURL = nil; awaitingEntrance = true
+        snapshot = nil; plan = .unknown; stale = false; fingerprint = nil; organization = ""
+        accountDisplayName = "账户待核对"; status = message
+    }
+    /// Refresh once after every completed Claude reply, bypassing the 60 s
+    /// reuse window; the short delay lets the service record the reply first.
+    /// CLI needs nothing here: Claude Code re-reports after each reply.
+    func refreshAfterReply() {
+        guard !awaitingEntrance, source == .desktop || source == .session || source == .visiblePage else { return }
+        replyRefresh?.cancel()
+        let delay = replyRefreshDelay
+        replyRefresh = Task { [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard let self, !self.awaitingEntrance else { return }
+            self.replyRefresh = nil
+            self.refresh(force: true)
+        }
+    }
+    /// Periodic refresh while a Desktop/session entrance is connected. Web is
+    /// refreshed by its extension and CLI by its own status-line cycle.
+    func startPeriodicRefresh(every interval: Duration = .seconds(60)) {
+        periodic?.cancel()
+        periodic = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: interval) } catch { return }
+                guard let self else { return }
+                if !self.awaitingEntrance, self.source == .desktop || self.source == .session { self.refresh(force: true) }
+            }
+        }
     }
     func stopFollowing() {
         guard following else { return }
@@ -204,7 +244,7 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         if removed != "removed" { status = "已断开额度连接；钥匙串暂不可访问，已保存 session 保留。" }
     }
     private func configure(_ source: Source) {
-        stop(); self.source = source; accountDisplayName = "账户待核对"; fingerprint = nil; snapshot = nil; plan = .unknown; organization = ""; stale = false
+        stop(); awaitingEntrance = false; self.source = source; accountDisplayName = "账户待核对"; fingerprint = nil; snapshot = nil; plan = .unknown; organization = ""; stale = false
         invalidVisibleConnection = false
         retryAfter = .distantPast
         if source == .desktop || source == .session {
@@ -325,7 +365,7 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         acquisitionTask?.cancel(); acquisitionTask = nil; acquiring = false
     }
     func refresh(force: Bool = false, allowPrompt: Bool = false) {
-        guard !invalidVisibleConnection else { return }
+        guard !invalidVisibleConnection, !awaitingEntrance else { return }
         guard enabled() || visibleConnection != nil else { return }
         guard source == .desktop || source == .session else {
             if force, source != .visibleAX { acquire(channel, binding: evidenceBinding.isEmpty ? nil : evidenceBinding, pageURL: followingURL); return }
@@ -336,7 +376,8 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         guard task == nil else { return }
         requested = true
         if retryAfter > Date() {
-            status = "查询稍后重试"; stale = snapshot != nil
+            // Keep the actionable reason (e.g. keychain authorization) visible.
+            status = lastFailure.map { $0 + "（稍后自动重试）" } ?? "查询稍后重试"; stale = snapshot != nil
             if automaticRetry == nil {
                 let seconds = max(0, retryAfter.timeIntervalSinceNow)
                 automaticRetry = Task { [weak self] in
@@ -372,10 +413,10 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
                     if current.fingerprint != connection.fingerprint {
                         snapshot = nil; self.plan = .unknown; fingerprint = nil; accountDisplayName = "账户待核对"; requested = true; continue
                     }
-                    snapshot = value; self.plan = plan; lastSuccess = Date(); failures = 0; stale = false; status = "已更新 · " + source.name
+                    snapshot = value; self.plan = plan; lastSuccess = Date(); failures = 0; lastFailure = nil; stale = false; status = "已更新 · " + source.name
                 } catch {
                     guard generation == token, !Task.isCancelled else { return }
-                    stale = snapshot != nil; status = error.localizedDescription
+                    stale = snapshot != nil; status = error.localizedDescription; lastFailure = error.localizedDescription
                     if let error = error as? ClaudeUsageError, error == .expired || error == .desktopMissing || error == .keychain || error == .connection {
                         snapshot = nil; plan = .unknown; fingerprint = nil; organization = ""; stale = false; accountDisplayName = "账户待核对"
                     }

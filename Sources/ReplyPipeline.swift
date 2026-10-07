@@ -20,6 +20,8 @@ import Foundation
     var onTranslation: (String, String, String, Bool) -> Void = { _, _, _, _ in }
     var onCompletion: (String, Bool) -> Void = { _, _ in }
     var onStatus: (String, Bool) -> Void = { _, _ in }
+    /// Local translation used when the primary service fails for one slice.
+    var fallback: (@MainActor (String) async throws -> String)?
     private let incremental: Bool
     private let translate: @MainActor (String) async throws -> String
     private var records: [String: Record] = [:]
@@ -146,14 +148,28 @@ import Foundation
         task = Task { [weak self] in
             guard let self else { return }
             do {
-                let translated = slice.part.translatable ? try await TranslationContext.$source.withValue(slice.part.context) {
-                    try await TextTranslation.run(slice.part.text, translate: self.translate)
+                var fallbackReason: Error?
+                let translated = slice.part.translatable ? try await TranslationFidelity.$target.withValue(.chinese) {
+                    try await TranslationContext.$source.withValue(slice.part.context) {
+                        do { return try await TextTranslation.run(slice.part.text, translate: self.translate) }
+                        catch let error where !(error is CancellationError) && !Task.isCancelled && self.fallback != nil {
+                            // The primary service failed or produced suspicious output:
+                            // translate this slice locally instead of stranding it.
+                            let value = try await TextTranslation.run(slice.part.text, translate: self.fallback!)
+                            fallbackReason = error
+                            return value
+                        }
+                    }
                 } : slice.part.text
                 let value = slice.part.tableCell && slice.part.translatable ? MarkdownTable.escapeCell(translated) : translated
                 guard epoch == token, !Task.isCancelled, let current = records[id], index < current.slices.count, current.slices[index].revision == slice.revision else { return }
                 records[id]?.slices[index].chinese = value
                 publish(id)
-                onStatus(hasFailures ? "部分片段翻译失败，原文和已有中文已保留；可重试未完成片段。" : "阶段性中文已更新，继续读取后续回复。", false)
+                if let fallbackReason {
+                    onStatus("翻译服务未能提供可用译文（" + fallbackReason.localizedDescription + "），本段已改用系统翻译。", false)
+                } else {
+                    onStatus(hasFailures ? "部分片段翻译失败，原文和已有中文已保留；可重试未完成片段。" : "阶段性中文已更新，继续读取后续回复。", false)
+                }
             } catch {
                 guard epoch == token, let current = records[id], index < current.slices.count, current.slices[index].revision == slice.revision else { return }
                 if let wait = error as? ServiceCooldown {

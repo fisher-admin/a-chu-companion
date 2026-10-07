@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import OSLog
 
 struct ReplySnapshot: Sendable {
     let conversation: String
@@ -8,6 +9,8 @@ struct ReplySnapshot: Sendable {
     let responseComplete: Bool
 }
 final class ClaudeSource: @unchecked Sendable {
+    private var lastStructure = ""
+    private var streamingOrdinal: (conversation: String, ordinal: Int)?
     let pid: pid_t
     private let metricsLock = NSLock()
     private var captureSamples = 0
@@ -242,7 +245,11 @@ final class ClaudeSource: @unchecked Sendable {
                 return .init(element: element, ordinal: ordinal, children: nested, author: author,
                              isStreamingAssistant: streaming)
             }
-            let pieces = try ClaudeDecoder.codeStreamingPieces(ClaudeDecoder.codeTranscriptPieces(try await branch(region, depth: 0)))
+            let continuing = streamingOrdinal?.conversation == conversation ? streamingOrdinal?.ordinal : nil
+            let pieces = try ClaudeDecoder.codeStreamingPieces(ClaudeDecoder.codeTranscriptPieces(try await branch(region, depth: 0)), continuing: continuing)
+            if !visibleOnly {
+                streamingOrdinal = pieces.first(where: \.isStreamingAssistant).flatMap { $0.ordinal }.map { (conversation, $0) }
+            }
             let ranges = try ClaudeDecoder.codeMessageRanges(pieces.map { $0.ordinal.map { "Message \($0)" } ?? "" })
             if let latest = ranges.last {
                 for group in ranges.suffix(visibleOnly ? 100 : 8) {
@@ -309,6 +316,14 @@ final class ClaudeSource: @unchecked Sendable {
             }
         } else {
             messages = format == .code ? try ClaudeDecoder.recentCodeSegments(nodes, responseComplete: complete) : try ClaudeDecoder.recentMessages(nodes)
+        }
+        if format == .code, !visibleOnly {
+            // Structure only (roles, counts, authors); never message text.
+            let summary = ClaudeDecoder.structureSummary(nodes) + " decoded=" + messages.map { "\($0.ordinal).\($0.segment)" }.joined(separator: ",")
+            if summary != lastStructure {
+                lastStructure = summary
+                Logger(subsystem: "local.achu.companion", category: "capture").notice("Code transcript structure: \(summary, privacy: .public)")
+            }
         }
         return ReplySnapshot(conversation: conversation, messages: messages, foundTranscript: true, responseComplete: complete)
     }

@@ -51,8 +51,11 @@ import Foundation
         var slowGemini = try geminiRequest("你好", "slow"); slowGemini.timeoutInterval = 0.3
         do { _ = try await AITranslator.translate(slowGemini, provider: .gemini); fputs("FAIL: Gemini network timeout accepted\n", stderr); exit(1) }
         catch {
-            guard error.localizedDescription.contains("Gemini") && error.localizedDescription.contains("网络") else {
-                fputs("FAIL: Gemini network failure needs clear Chinese feedback\n", stderr); exit(1)
+            // build59: a slow service is a timeout, not a local network fault
+            // (build58 showed "check your network" after server-side 503s).
+            guard error.localizedDescription.contains("Gemini") && error.localizedDescription.contains("超时")
+                    && !error.localizedDescription.contains("检查网络") else {
+                fputs("FAIL: Gemini timeout needs clear Chinese feedback that is not a network fault\n", stderr); exit(1)
             }
         }
         print("PASS: Gemini network timeouts produce clear feedback without exposing request details")

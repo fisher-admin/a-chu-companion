@@ -242,6 +242,10 @@ struct AITranslator {
         do { (data, response) = try await session.data(for: request) }
         catch {
             if provider == .gemini, let network = error as? URLError, network.code != .cancelled {
+                // A slow or overloaded service is not a local network fault.
+                if network.code == .timedOut {
+                    throw BridgeError.message("Gemini 翻译服务响应超时（服务可能繁忙），原文已保留；可稍后重试。")
+                }
                 throw BridgeError.message("无法连接 Gemini 翻译服务，请检查网络连接后重试；原文已保留。")
             }
             throw error

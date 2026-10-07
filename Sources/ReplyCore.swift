@@ -137,6 +137,18 @@ enum ClaudeDecoder {
         finish(responseComplete)
         return result
     }
+    /// Privacy-safe diagnostic: per message, its ordinal, detected author,
+    /// streaming flag and counts of images, buttons and text characters.
+    static func structureSummary(_ nodes: [ReplyNode]) -> String {
+        func count(_ node: ReplyNode, _ match: (ReplyNode) -> Bool) -> Int { (match(node) ? 1 : 0) + node.children.reduce(0) { $0 + count($1, match) } }
+        func chars(_ node: ReplyNode) -> Int { node.text.count + node.children.reduce(0) { $0 + chars($1) } }
+        return nodes.map { node in
+            let ordinal = position(node.label, format: .code)?.ordinal ?? -1
+            let author = codeAuthor(node, ordinal: ordinal).map { $0 == .user ? "u" : "a" } ?? "?"
+            let headings = count(node) { $0.role == "AXHeading" }
+            return "[\(ordinal) \(author) s=\(node.isStreamingAssistant ? 1 : 0) img=\(count(node) { $0.role == "AXImage" }) btn=\(count(node) { $0.role == "AXButton" }) h=\(headings) top=\(node.children.count) chars=\(chars(node))]"
+        }.joined(separator: " ")
+    }
     static func recentCodeSegments(_ nodes: [ReplyNode], responseComplete: Bool) throws -> [ChatMessage] {
         let full = try recentMessages(nodes, format: .code)
         let ordinals = Set(full.map(\.ordinal))
@@ -199,20 +211,28 @@ enum ClaudeDecoder {
         if nested.contains(where: { $0.ordinal != nil || $0.isStreamingAssistant }) { return nested }
         return [.init(element: branch.element, ordinal: branch.ordinal, author: branch.author, isStreamingAssistant: branch.isStreamingAssistant)]
     }
-    static func codeStreamingPieces<Element>(_ pieces: [CodeTranscriptPiece<Element>]) throws -> [CodeTranscriptPiece<Element>] {
+    /// `continuing` is the ordinal this conversation's streaming container was
+    /// validated with earlier. Long turns scroll the user anchor out of the
+    /// virtualized transcript; only an unanchored, sole, final container may
+    /// keep that ordinal.
+    static func codeStreamingPieces<Element>(_ pieces: [CodeTranscriptPiece<Element>], continuing: Int? = nil) throws -> [CodeTranscriptPiece<Element>] {
         var result: [CodeTranscriptPiece<Element>] = []
         var previous: (ordinal: Int, author: ChatMessage.Author?)?
         for (index, piece) in pieces.enumerated() {
             if piece.isStreamingAssistant {
                 // Only the explicit renderer container, after a verified user
                 // anchor in this transcript, may stand in for a missing ordinal.
-                guard let previous, previous.author == .user,
-                      previous.ordinal < Int.max,
-                      piece.ordinal == nil || piece.ordinal == previous.ordinal + 1,
-                      !pieces.dropFirst(index + 1).contains(where: { $0.ordinal != nil || $0.isStreamingAssistant }) else {
+                let later = pieces.dropFirst(index + 1).contains(where: { $0.ordinal != nil || $0.isStreamingAssistant })
+                let ordinal: Int
+                if let previous, previous.author == .user, previous.ordinal < Int.max,
+                   piece.ordinal == nil || piece.ordinal == previous.ordinal + 1, !later {
+                    ordinal = previous.ordinal + 1
+                } else if previous == nil, let continuing, piece.ordinal == nil || piece.ordinal == continuing, !later {
+                    ordinal = continuing
+                } else {
                     throw ReplyReadPending(message: "Claude Code 流式回复边界尚未完整。")
                 }
-                result.append(.init(element: piece.element, ordinal: previous.ordinal + 1,
+                result.append(.init(element: piece.element, ordinal: ordinal,
                                     author: .assistant, isStreamingAssistant: true))
             } else {
                 result.append(piece)
@@ -282,6 +302,8 @@ enum ClaudeDecoder {
         return MarkdownTable.source(headers: headers, rows: Array(rows.dropFirst()))
     }
     private enum CodeBodyPart { case text(BodyText), tool }
+    /// Claude app interface prompts observed inside a reply's AX subtree.
+    static let appPrompts: Set<String> = ["How is Claude doing this session?", "How's Claude doing this session?"]
     private static func codeBody(_ root: ReplyNode) -> String {
         joined(codeBodyParts(root).compactMap { part -> BodyText? in
             if case .text(let value) = part { return value }; return nil
@@ -342,6 +364,28 @@ enum ClaudeDecoder {
                     } else { index += 1 }
                 }
                 if !inlineWhitespace {
+                    // Bold, inline code and similar runs of one sentence arrive
+                    // as flattened siblings, and AX sometimes drops the space at
+                    // their seam. Adjacent runs continue the sentence unless the
+                    // earlier one ends it; a colon or semicolon ends it only
+                    // before a capitalised run. Dropped word spacing is restored.
+                    for index in fragments.indices where index > 0 {
+                        let before = fragments[index - 1], current = fragments[index]
+                        guard !before.block, !current.block, before.value.last?.isNewline != true,
+                              current.value.first?.isNewline != true,
+                              let last = before.value.last(where: { !$0.isWhitespace }),
+                              let first = current.value.first(where: { !$0.isWhitespace }) else { continue }
+                        if ".!?。！？".contains(last) { continue }
+                        if ":;：；".contains(last), first.isUppercase { continue }
+                        fragments[index - 1].joinsNext = true; fragments[index].joinsPrevious = true
+                        let seam = [" ", "\t"].contains(before.value.last) || [" ", "\t"].contains(current.value.first)
+                        let closing = ",.;:!?)]\u{201D}\u{2019}".contains(first)
+                        if !seam, !closing, (last.isLetter || last.isNumber || ":;,".contains(last)), (first.isLetter || first.isNumber),
+                           !(last.isCJK && first.isCJK), !first.isCJK || !":;,".contains(last) {
+                            fragments[index] = BodyText(value: " " + current.value, joinsPrevious: true, joinsNext: current.joinsNext,
+                                                        block: current.block, staticFileName: current.staticFileName)
+                        }
+                    }
                     // Code's ordinal wrapper is flattened by AX. A static
                     // filename with an explicit preceding inline space still
                     // belongs to that sentence, including following punctuation.
@@ -379,7 +423,7 @@ enum ClaudeDecoder {
                 let value = node.text.isEmpty ? node.label : node.text
                 let marker = node.role == "AXListMarker"
                 let content = marker && value.last?.isWhitespace != true ? value + " " : value
-                return value.isEmpty || excluded.contains(activityKey(value)) ? [] : [.text(.init(value: content, joinsNext: marker, staticFileName: !marker && inlineReference(value)))]
+                return value.isEmpty || excluded.contains(activityKey(value)) || appPrompts.contains(value.trimmingCharacters(in: .whitespacesAndNewlines)) ? [] : [.text(.init(value: content, joinsNext: marker, staticFileName: !marker && inlineReference(value)))]
             }
             if node.role == "AXLink" {
                 let value = text(node)
@@ -396,7 +440,12 @@ enum ClaudeDecoder {
                             ["running", "Working…", "Thinking…", "Working...", "Thinking..."].contains($0) ||
                             $0.range(of: "^[0-9,.]+ tokens$", options: .regularExpression) != nil
                         }
-                    return footer ? [] : body(child)
+                    // A tool still in progress renders its label beside a bare
+                    // "running" status before its card controls appear.
+                    let running = child.role == "AXGroup" && !values.isEmpty &&
+                        child.children.allSatisfy { $0.role == "AXStaticText" } &&
+                        values.contains { ["running", "Running", "running…", "Running…"].contains($0.trimmingCharacters(in: .whitespaces)) }
+                    return footer ? [] : running ? [.tool] : body(child)
                 })
             }
             return coalesce(node.children.flatMap(body), inlineWhitespace: position(node.label, format: .code) == nil,
@@ -574,5 +623,11 @@ struct ReplyTracker {
         guard now - changedAt >= 3, candidate != emitted else { return nil }
         emitted = candidate
         return candidate
+    }
+}
+
+private extension Character {
+    var isCJK: Bool {
+        unicodeScalars.first.map { (0x3040...0x30FF).contains($0.value) || (0x3400...0x9FFF).contains($0.value) || (0xAC00...0xD7AF).contains($0.value) } ?? false
     }
 }

@@ -22,7 +22,12 @@ import Translation
         didSet { CompanionPreferences.store.set(stagePreview, forKey: "stagePreview"); resetTranslation() }
     }
     var onReplyObserved: () -> Void = {}
+    /// Fires once per completed reply (the latest assistant message with the
+    /// source reporting completion), never for streaming updates.
+    var onReplyCompleted: () -> Void = {}
+    private var lastCompletedCandidate: ReplyCandidate?
     var testTranslation: (@MainActor (String) async throws -> String)?
+    var testFallback: (@MainActor (String) async throws -> String)?
     private var lastUsageCandidate: ReplyCandidate?
     private var source: ClaudeSource?
     private var polling: Task<Void, Never>?
@@ -51,7 +56,14 @@ import Translation
             let base = baseURL, selectedModel = model, selectedLanguage = language
             let key = try await Credentials.readAsync(for: provider, baseURL: base)
             let request = try provider.request(text: text, baseURL: base, model: selectedModel, key: key, direction: .toChinese(selectedLanguage))
-            return try await AITranslator.translate(request, provider: provider)
+            return SystemTranslationProtection.simplified(try await AITranslator.translate(request, provider: provider))
+        }
+        if engine != "apple" {
+            pipeline.fallback = { [weak self] text in
+                guard let self else { throw CancellationError() }
+                if let testFallback { return try await testFallback(text) }
+                return try await translateApple(text)
+            }
         }
         pipeline.onOriginal = { [weak self] id, text, message in
             guard let self else { return }
@@ -102,7 +114,11 @@ import Translation
         }
         transientReadDisplay = nil
         if let latest = snapshot.messages.last(where: { $0.author == .assistant }) {
-            reportReplyObserved(.init(ordinal: latest.ordinal, text: latest.text, segment: latest.segment))
+            let candidate = ReplyCandidate(ordinal: latest.ordinal, text: latest.text, segment: latest.segment)
+            reportReplyObserved(candidate)
+            if snapshot.responseComplete, lastCompletedCandidate != candidate {
+                lastCompletedCandidate = candidate; onReplyCompleted()
+            }
         }
         translationPipeline().observe(conversation: snapshot.conversation, messages: snapshot.messages,
                                       responseComplete: snapshot.responseComplete, now: now)
@@ -173,7 +189,9 @@ import Translation
             activeSession = session
         }
         try Task.checkCancellation()
-        let value = try await session.translate(TranslationContext.systemInput(text)).targetText
+        let value = try await SystemTranslationProtection.translate(TranslationContext.systemInput(text), toChinese: true) {
+            try await session.translate($0).targetText
+        }
         try Task.checkCancellation()
         return value
     }
@@ -226,7 +244,7 @@ import Translation
         transientReadDisplay = nil
         sessionID = UUID(); watching = false; polling?.cancel(); polling = nil
         pipeline?.cancel(); pipeline = nil; cancelSystem(); translating = false
-        source = nil; lastUsageCandidate = nil; historyRequestID = nil; historyChoices = []; showHistoryPicker = false
+        source = nil; lastUsageCandidate = nil; lastCompletedCandidate = nil; historyRequestID = nil; historyChoices = []; showHistoryPicker = false
         status = "自动读取已停止。"
         if clear { original = ""; chinese = "" }
     }

@@ -8,6 +8,7 @@ final class TranslatorModel: ObservableObject {
     let health = HealthCenter()
     let bridge = BridgeCoordinator()
     var testTranslation: (@MainActor (String) async throws -> String)?
+    var testFallback: (@MainActor (String) async throws -> String)?
     func refreshHealth() {
         refreshPermission()
         let key = "\(self.permission):\(hasTarget):\(self.engine):\(self.baseURL):\(self.activeAIModel):\(self.language.rawValue):\(self.replies.watching):\(self.bridge.enabled):\(self.bridge.selected)"
@@ -172,6 +173,7 @@ final class TranslatorModel: ObservableObject {
     }
     var revealWindow: () -> Void = {}
     var onClaudeConnection: (ClaudeUsageChannel, String?) -> Void = { _, _ in }
+    var onNonClaudeConnection: (String) -> Void = { _ in }
     private let permissionMonitor: AccessibilityPermissionMonitor
     private var target: TargetBridge.Target?
     private var task: Task<Void, Never>?
@@ -190,6 +192,9 @@ final class TranslatorModel: ObservableObject {
         let send: Bool
         let commandReturn: Bool
         let language: TranslationLanguage
+        /// Set when the system translation replaces a failed remote result.
+        /// Such a draft is only shown for review; it is never inserted or sent.
+        var fallbackReason: String? = nil
     }
 
     init(permissionCheck: @escaping @MainActor () -> Bool = { TargetBridge.trusted },
@@ -251,11 +256,6 @@ final class TranslatorModel: ObservableObject {
             isError = false
             bridge.stop()
             startReplyReading()
-            if target!.app.bundleIdentifier == "com.anthropic.claudefordesktop" {
-                onClaudeConnection(.desktop, nil)
-            } else if let url = target!.conversation {
-                onClaudeConnection(.web, url)
-            }
         } catch {
             target = nil; hasTarget = false; targetName = "未选择输入框"
             status = error.localizedDescription; isError = false
@@ -317,12 +317,16 @@ final class TranslatorModel: ObservableObject {
                         try Task.checkCancellation()
                         guard activeID == job.id else { throw CancellationError() }
                         _ = try provider.request(text: "测试", baseURL: base, model: model, key: key, direction: .fromChinese(job.language))
-                        let result = try await TextTranslation.runProtected(text) { chunk in
-                            if let testTranslation = self.testTranslation { return try await testTranslation(chunk) }
-                            let request = try provider.request(text: chunk, baseURL: base, model: model, key: key, direction: .fromChinese(job.language))
-                            return try await AITranslator.translate(request, provider: provider)
+                        let result = try await TranslationFidelity.$target.withValue(.foreign(job.language)) {
+                            try await TextTranslation.runProtected(text) { chunk in
+                                if let testTranslation = self.testTranslation { return try await testTranslation(chunk) }
+                                let request = try provider.request(text: chunk, baseURL: base, model: model, key: key, direction: .fromChinese(job.language))
+                                return try await AITranslator.translate(request, provider: provider)
+                            }
                         }
                         try await finish(result, job: job)
+                    } catch let error where !(error is CancellationError) && !Task.isCancelled && activeID == job.id {
+                        startSystemFallback(job, reason: error, provider: provider)
                     } catch { failed(error, id: job.id) }
                 }
             } else {
@@ -345,7 +349,13 @@ final class TranslatorModel: ObservableObject {
         do {
             _ = try await TextTranslation.withDeadline { try await session.prepareTranslation(); return "" }
             try Task.checkCancellation()
-            let result = try await TextTranslation.runProtected(job.text) { chunk in try await session.translate(TranslationContext.systemInput(chunk)).targetText }
+            let result = try await TranslationFidelity.$target.withValue(.foreign(job.language)) {
+                try await TextTranslation.runProtected(job.text) { chunk in
+                    try await SystemTranslationProtection.translate(TranslationContext.systemInput(chunk), toChinese: false) {
+                        try await session.translate($0).targetText
+                    }
+                }
+            }
             try await finish(result, job: job)
         } catch { failed(error, id: job.id) }
     }
@@ -383,8 +393,38 @@ final class TranslatorModel: ObservableObject {
             if case .unconfirmed = outcome {
                 // Keep the draft for a safe retry when the source cannot verify the paste.
             } else if input == job.text { input = "" }
+        } else if let reason = job.fallbackReason {
+            report("已改用系统翻译生成译文（" + reason + "）。请检查后点「填入译文」；没有自动填入或发送。")
         } else { report("翻译完成，可以检查或复制译文。") }
         busy = false; pending = nil; activeID = nil; appleSession = nil
+    }
+    private func startSystemFallback(_ job: Job, reason: Error, provider: RemoteTranslationProvider) {
+        let service = provider == .gemini ? "Gemini" : "AI 翻译服务"
+        let fallback = Job(id: job.id, text: job.text, insert: false, target: job.target, send: false,
+                       commandReturn: job.commandReturn, language: job.language,
+                       fallbackReason: service + "：" + reason.localizedDescription)
+        pending = fallback
+        report(service + " 未能提供可用译文，正在改用系统翻译；完成后不会自动填入或发送。")
+        if let testFallback {
+            task = Task {
+                do {
+                    let result = try await TranslationFidelity.$target.withValue(.foreign(job.language)) {
+                        try await TextTranslation.runProtected(job.text, translate: testFallback)
+                    }
+                    try await finish(result, job: fallback)
+                } catch { failed(error, id: job.id) }
+            }
+            return
+        }
+        preparationWatchdog = Task { [weak self] in
+            do {
+                try await Task.sleep(for: self?.applePreparationTimeout ?? .seconds(120))
+                self?.failed(TranslationChunkError.timedOut, id: job.id)
+            } catch { /* The system callback or cancellation ended this wait. */ }
+        }
+        if configuration == nil {
+            configuration = .init(source: .init(identifier: "zh-Hans"), target: .init(identifier: job.language.rawValue))
+        } else { configuration?.invalidate() }
     }
     func insertResult() {
         guard !busy, !output.isEmpty else { return }
@@ -422,6 +462,20 @@ final class TranslatorModel: ObservableObject {
     func startReplyReading() {
         guard !busy, let target else { report("请先点击 Claude 输入框，再按 ⌃⌥E。", error: true); return }
         Task { await replies.connect(target: target, engine: engine, baseURL: baseURL, model: activeAIModel, language: language) }
+        announceEntrance(target)
+    }
+    /// Usage follows the entrance actually connected, on first connection and
+    /// whenever reading resumes (stopping reading hides usage).
+    private func announceEntrance(_ target: TargetBridge.Target) {
+        if target.app.bundleIdentifier == "com.anthropic.claudefordesktop" {
+            onClaudeConnection(.desktop, nil)
+        } else if let url = target.conversation {
+            onClaudeConnection(.web, url)
+        } else {
+            // Translation still works, but this composer is not a verified
+            // Claude entrance, so no account's quota may be shown for it.
+            onNonClaudeConnection(target.name)
+        }
     }
     func copyOutput() {
         guard !output.isEmpty else { return }

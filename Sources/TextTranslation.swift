@@ -68,6 +68,11 @@ enum TranslationChunks {
             if TranslationContext.source != nil, core.count <= 80, translated.count > max(80, core.count * 6) {
                 throw BridgeError.message("单元格译文异常过长，可能混入周围正文；未显示该结果，请重试。")
             }
+            // Check the raw provider output: flattening below would otherwise
+            // hide an appended answer paragraph, heading or table.
+            if TranslationContext.source == nil {
+                try TranslationFidelity.validate(source: core, translation: translated, target: TranslationFidelity.target)
+            }
             // Provider-added line breaks are formatting, not new paragraphs.
             // Literal multiline source and table-cell escaping remain intact.
             let normalized = TranslationContext.source == nil && !core.contains(where: \.isNewline)
