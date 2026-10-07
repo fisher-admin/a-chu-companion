@@ -21,6 +21,20 @@ enum TranslationChunks {
 }
 
 @MainActor enum TextTranslation {
+    static func runProtected(_ text: String, partial: (String) -> Void = { _ in },
+                             translate: @escaping @MainActor (String) async throws -> String) async throws -> String {
+        var result = ""
+        for part in TranslationStructure.chunks(text) {
+            try Task.checkCancellation()
+            let value = part.translatable ? try await TranslationContext.$source.withValue(part.context) {
+                try await run(part.text, translate: translate)
+            } : part.text
+            result += part.tableCell && part.translatable ? MarkdownTable.escapeCell(value) : value
+            partial(result)
+        }
+        return result
+    }
+
     static func run(_ text: String, limit: Int = 3_000,
                     progress: (Int, Int) -> Void = { _, _ in },
                     timeout: Duration = .seconds(120),
@@ -47,8 +61,19 @@ enum TranslationChunks {
         do {
             let value = try await withDeadline(timeout: timeout) { try await translate(core) }
             try Task.checkCancellation()
-            guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw BridgeError.message("翻译服务返回空白片段，未提交译文。") }
-            return prefix + value + suffix
+            let translated = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !translated.isEmpty else { throw BridgeError.message("翻译服务返回空白片段，未提交译文。") }
+            // Short contextual cells must not turn into translations of the
+            // surrounding paragraph. Keep the original and offer explicit retry.
+            if TranslationContext.source != nil, core.count <= 80, translated.count > max(80, core.count * 6) {
+                throw BridgeError.message("单元格译文异常过长，可能混入周围正文；未显示该结果，请重试。")
+            }
+            // Provider-added line breaks are formatting, not new paragraphs.
+            // Literal multiline source and table-cell escaping remain intact.
+            let normalized = TranslationContext.source == nil && !core.contains(where: \.isNewline)
+                ? translated.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+                : translated
+            return prefix + TranslationContext.qualifiedCellOutput(normalized, original: core) + suffix
         } catch TranslationChunkError.tooLarge {
             guard core.count > 64 else { throw TranslationChunkError.tooLarge }
             var result = prefix

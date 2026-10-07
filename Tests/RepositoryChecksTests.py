@@ -42,6 +42,11 @@ class RepositoryChecksTests(unittest.TestCase):
         self.assertEqual(checks.credential_kinds("config", github), ["GitHub token"])
         self.assertEqual(checks.credential_kinds("config", anthropic), ["Anthropic API key"])
 
+    def test_google_api_key_pattern_is_detected_without_returning_key_data(self):
+        synthetic = "AI" + "za" + "0" * 35
+        self.assertEqual(checks.credential_kinds("settings.json", synthetic), ["Google API key"])
+        self.assertEqual(checks.credential_kinds("notes.md", "AIza is a prefix, not a key."), [])
+
 
 if __name__ == "__main__":
     unittest.main()

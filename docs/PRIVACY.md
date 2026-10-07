@@ -33,3 +33,27 @@ Usage can use the current desktop login or a supplied session. Supplied credenti
 Language, text size, send options, and provider settings are local preferences. Local installation creates/reuses a nonextractable signing key in the user's Keychain, with configuration in Application Support. These are not distributed, do not change system trust, and do not constitute Apple notarization.
 
 Public issues, PRs, CI logs, and release material are visible to others. Share only synthetic/sanitized evidence. CI uses mock services and fictional credentials; it does not access personal logins. Checks do not print matched secret contents, and no scanner guarantees detection of all sensitive information.
+
+## 1.1.7 experimental bridge / 实验桥接
+
+The read-only bridge uses a private local socket and rotating token. It never exposes API keys to a browser or hook. Only explicitly enabled Claude tabs or configured CLI events are received; session storage holds selected tab IDs, not chat text. Usage adapters relay only subscription windows, used percentages and reset descriptions. Account binding is user-confirmed; switching to a visible source disables hidden credential fallback. No adapter is installed by normal startup. / 只读桥接使用私人本机端口与轮换令牌，不向浏览器或 hook 提供 API key；只接收用户启用的标签或配置的 CLI 事件。会话存储仅含标签编号，不保存正文。用量仅传订阅窗口、比例和重置说明；账号由用户确认，可见来源迁移后关闭隐藏凭据回退。正常启动不安装适配器。
+
+Code fences, inline code and explicit URLs/paths are kept locally when translating surrounding prose. Natural-language slices still reach the selected cloud translator when cloud translation is enabled. The simulation fixture uses separate preferences, blocks real API requests and Keychain access, and never connects to real Claude. / 翻译周围正文时，代码围栏、行内代码和明确 URL／路径在本地保留；选择云翻译后，自然语言片段仍发送至用户选定服务。模拟程序隔离偏好，禁止真实 API 及钥匙串读取，也不连接真实 Claude。
+
+Passive credential checks query only the selected endpoint's Keychain metadata, with interaction disabled. They do not read secret data, migrate keys or infer that a model can generate. Locked or permission-limited results remain unknown. Policy links and their check date are built in; displaying the health panel does not fetch those pages or issue translation requests. / 被动密钥检查只查询当前接口对应的钥匙串元数据，并禁止交互；不读取密钥正文、不迁移密钥，也不推断模型能否生成。锁定或权限不足仍标未知。政策链接和核验日期内置，显示状态面板不打开网页、不发送翻译请求。
+
+## Tables and contextual translation / 表格与语境翻译
+
+Ordinary table geometry and numeric cells remain local. Gemini receives only translatable cell text plus, when needed, a bounded excerpt of nearby natural-language prose and table words (at most 1,200 characters). This context helps disambiguate terms; it is untrusted data, and the model is instructed to translate only the selected source text. Protected code, formulas, explicit paths and URLs are omitted from context. Logs contain request character counts, including contextual text, rather than message content or credentials. / 普通表格的行列结构和数值单元格保留在本地。Gemini 仅接收需翻译的单元格文字，并在需要时接收有限的附近自然语言正文和表格文字（最多 1,200 字符），用于判断词义。语境作为不可信数据，规则限定模型只翻译选定原文；受保护的代码、公式、明确路径和网址不进入语境。日志记录包含语境的请求字符数，不记录正文或密钥。
+
+## 当前账户与额度来源（build54）
+
+桌面、网页和 CLI 的账户分别核对。手工账户备注不构成身份。桥接仅接收账户指纹及遮蔽名称，不转发原始邮箱、Cookie、OAuth 或 API key；这些身份信息只用于本机比较，不发送给翻译服务。CLI 使用官方 `claude auth status` 的元数据，在会话启动时绑定；全局登录变化后旧会话额度失效。隔离安装目录内的 `achu-account-state` 保存有权限限制的指纹、遮蔽名称和读取序号，不保存聊天或凭据。卸载恢复用户设置；状态文件不会再被调用。
+
+网页只在当前可见账户菜单能提供唯一身份、同次读取前后身份一致时接收可信额度。昵称、套餐名称和手工 session 不能证明浏览器当前账户。身份无法确认时隐藏额度，等待核对；这不是自动浏览器额度连接已经真实验收的声明。
+
+## 连接聊天自动取得额度（build56）
+
+上述 build54 DOM 账户采集被网页同源只读请求替代。用户启用的官方 claude.ai 标签使用浏览器已有会话请求账户与唯一组织额度，并在请求前后核对身份。没有 Cookie 读取权限，不提取、保存或传递 Cookie/OAuth；原始账户响应、邮箱和组织标识只在页面采集器短暂处理，本机只收遮蔽名称、指纹和限额。多组织不猜测。停止、导航或身份变化使未完成请求失效。请求与聊天正文读取独立，私有接口结构变化会明确失败。
+
+聊天连接自动使用经过核对的同一来源报告；手动 session 仍是独立来源，不自动跟随浏览器。CLI 设置动作仅包装用户原状态栏并加入本工具会话入口，可撤回；不会读取 OAuth，不因获取报告而向模型发送消息。状态栏定时/主动重跑只能称“当前报告”，不能证明服务器刷新。正常启动不自动安装扩展或修改个人 CLI 配置。

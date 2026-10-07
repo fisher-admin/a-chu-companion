@@ -1,7 +1,7 @@
 import Foundation
 
 @main struct CodeReplyTests {
-    static func main() throws {
+    @MainActor static func main() throws {
         // Sanitized shape observed in Claude Desktop Code: the ordinal marker
         // holds the author, while paragraphs and the final toolbar are siblings.
         let marker = ReplyNode(role: "AXGroup", label: "Message 4", children: [
@@ -50,7 +50,17 @@ import Foundation
         precondition(ClaudeConversationPage.format("https://claude.ai/chat/test") == .chat)
         precondition(ClaudeConversationPage.format("https://claude.ai/new") == .chat)
         print("PASS: desktop Code sessions and existing Chat routes are recognized separately")
-        for address in ["https://claude.ai/settings", "https://claude.ai/epitaxy", "https://claude.ai.evil.example/epitaxy/test", "http://claude.ai/epitaxy/test", "file:///epitaxy/test"] {
+        precondition(ClaudeConversationPage.format("https://claude.ai/epitaxy") == .code &&
+                     ClaudeConversationPage.format("https://claude.ai/epitaxy/") == .code,
+                     "an empty Code homepage must stay connected while waiting for its new conversation")
+        print("PASS: Code homepage waits for a new conversation instead of being treated as a closed page")
+        let waiting = ReplyMonitor(); waiting.watching = true
+        for _ in 0..<7 { waiting.handleReadFailure(ReplyReadPending(message: "Claude 消息区尚未就绪。")) }
+        precondition(waiting.watching && waiting.status.contains("继续检查"))
+        for _ in 0..<5 { waiting.handleReadFailure(BridgeError.message("Unrelated page")) }
+        precondition(!waiting.watching)
+        print("PASS: pending Code startup never exhausts the closed-page limit; unrelated pages still stop")
+        for address in ["https://claude.ai/settings", "https://claude.ai/epitaxy/test/other", "https://claude.ai.evil.example/epitaxy/test", "http://claude.ai/epitaxy/test", "file:///epitaxy/test"] {
             precondition(ClaudeConversationPage.format(address) == nil)
         }
         print("PASS: unrelated pages and untrusted origins remain excluded")
@@ -131,6 +141,80 @@ import Foundation
         let repeated = try tracker.observe(conversation: tracker.conversation, messages: [decoded], responseComplete: true, now: 1210)
         precondition(settling.isEmpty && completed.first?.text == decoded.text && repeated.isEmpty)
         print("PASS: twenty-minute Code work waits for the complete body and emits once")
-        print("17 Code reply tests passed")
+        let liveShape = CodeTranscriptBranch(element: "transcript", ordinal: nil, children: [
+            .init(element: "user anchor", ordinal: 1, author: .user),
+            .init(element: "streaming answer", ordinal: nil, isStreamingAssistant: true),
+            .init(element: "tool card", ordinal: nil), .init(element: "second stage", ordinal: nil)
+        ])
+        let livePieces = try ClaudeDecoder.codeStreamingPieces(ClaudeDecoder.codeTranscriptPieces(liveShape))
+        guard livePieces.map(\.ordinal) == [1, 2, nil, nil], livePieces[1].author == .assistant else {
+            fputs("FAIL: an explicitly streaming Code answer after a marked user must get its eventual ordinal before turn completion\n", stderr); exit(1)
+        }
+        print("PASS: streaming Code body is assigned its eventual reply identity before completion")
+        let liveNode = ReplyNode(role: "AXGroup", label: "Message 2", children: [
+            .init(role: "AXGroup", label: "Currently streaming message", children: [.init(role: "AXStaticText", text: "First stage.")]),
+            .init(role: "AXGroup", children: [.init(role: "AXButton", label: "Running computation"), .init(role: "AXStaticText", text: "PRIVATE TOOL OUTPUT")]),
+            .init(role: "AXStaticText", text: "Second stage.")
+        ], isStreamingAssistant: true)
+        let liveSegments = try ClaudeDecoder.recentCodeSegments([liveNode], responseComplete: false)
+        precondition(liveSegments.map(\.text) == ["First stage.", "Second stage."] && liveSegments.map(\.completed) == [true, false])
+        print("PASS: streaming authorless formal paragraphs translate independently without tool output")
+        var completedNode = liveNode
+        completedNode.isStreamingAssistant = false
+        completedNode.children[0] = .init(role: "AXGroup", label: "Message 2", children: [
+            .init(role: "AXHeading", label: "Claude responded: First stage."), .init(role: "AXStaticText", text: "First stage.")
+        ])
+        let finalSegments = try ClaudeDecoder.recentCodeSegments([completedNode], responseComplete: true)
+        precondition(finalSegments.map(\.address) == liveSegments.map(\.address) && finalSegments.map(\.text) == liveSegments.map(\.text))
+        print("PASS: final numbered renderer preserves live segment identities and content")
+        var untrustedNode = liveNode; untrustedNode.isStreamingAssistant = false
+        precondition(ClaudeDecoder.codeSegments(untrustedNode, responseComplete: false).isEmpty)
+        print("PASS: unmarked body alone still cannot impersonate an assistant")
+        for badPieces: [CodeTranscriptPiece<String>] in [
+            [.init(element: "orphan", ordinal: nil, isStreamingAssistant: true)],
+            [.init(element: "assistant", ordinal: 2, author: .assistant), .init(element: "stream", ordinal: nil, isStreamingAssistant: true)],
+            [.init(element: "unmarked", ordinal: 1), .init(element: "stream", ordinal: nil, isStreamingAssistant: true)],
+            [.init(element: "user", ordinal: 1, author: .user), .init(element: "stream", ordinal: nil, isStreamingAssistant: true), .init(element: "stream2", ordinal: nil, isStreamingAssistant: true)],
+            [.init(element: "user", ordinal: 1, author: .user), .init(element: "stream", ordinal: nil, isStreamingAssistant: true), .init(element: "conflict", ordinal: 2, author: .assistant)]
+        ] {
+            do { _ = try ClaudeDecoder.codeStreamingPieces(badPieces); fatalError("ambiguous streaming boundary must wait") }
+            catch { precondition(error is ReplyReadPending) }
+        }
+        print("PASS: orphan, unmarked, duplicate and conflicting streaming boundaries wait safely")
+        let secondTurn = try ClaudeDecoder.codeStreamingPieces([
+            CodeTranscriptPiece(element: "previous answer", ordinal: 2, author: .assistant),
+            .init(element: "next user", ordinal: 3, author: .user), .init(element: "next stream", ordinal: nil, isStreamingAssistant: true)
+        ])
+        precondition(secondTurn.last?.ordinal == 4)
+        print("PASS: subsequent Code turns retain continuous numbering without reconnecting")
+        let wrappedLive = CodeTranscriptBranch(element: "outer", ordinal: nil, children: [
+            .init(element: "user", ordinal: 1, author: .user),
+            .init(element: "wrapper", ordinal: nil, children: [.init(element: "live", ordinal: nil, isStreamingAssistant: true)])
+        ])
+        precondition(try! ClaudeDecoder.codeStreamingPieces(ClaudeDecoder.codeTranscriptPieces(wrappedLive)).last?.element == "live")
+        print("PASS: wrappers around a streaming anchor are flattened while tool subtrees remain intact")
+        var withActivity = liveNode
+        withActivity.children[0].children.append(.init(role: "AXGroup", children: [
+            .init(role: "AXStaticText", text: "63 tokens"), .init(role: "AXStaticText", text: "running"), .init(role: "AXStaticText", text: "Working…")
+        ]))
+        guard ClaudeDecoder.codeSegments(withActivity, responseComplete: false).map(\.text) == ["First stage.", "Second stage."] else {
+            fputs("FAIL: streaming renderer token and activity footer must stay outside the formal reply\n", stderr); exit(1)
+        }
+        print("PASS: streaming activity footer does not enter the formal reply")
+        let alreadyNumberedStream = try ClaudeDecoder.codeStreamingPieces([
+            CodeTranscriptPiece(element: "user", ordinal: 1, author: .user),
+            .init(element: "stream", ordinal: 2, isStreamingAssistant: true)
+        ])
+        var hiddenTitleNode = liveNode
+        hiddenTitleNode.children[0].label = "Message 2"
+        hiddenTitleNode.children[0].isStreamingAssistant = true
+        precondition(alreadyNumberedStream.last?.ordinal == 2 && ClaudeDecoder.codeSegments(hiddenTitleNode, responseComplete: false).map(\.text) == ["First stage.", "Second stage."])
+        print("PASS: a renderer ordinal in title does not hide streaming authorship from description")
+        do {
+            _ = try ClaudeDecoder.codeStreamingPieces([CodeTranscriptPiece(element: "user", ordinal: 1, author: .user), .init(element: "wrong stream", ordinal: 4, isStreamingAssistant: true)])
+            fatalError("conflicting streaming title must wait")
+        } catch { precondition(error is ReplyReadPending) }
+        print("PASS: streaming title cannot override a conflicting preceding user ordinal")
+        print("29 Code reply tests passed")
     }
 }

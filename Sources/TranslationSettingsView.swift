@@ -7,10 +7,14 @@ import SwiftUI
     @State private var baseURL = ""
     @State private var aiModel = ""
     @State private var geminiModel = GeminiProtocol.defaultModel
+    @State private var preset = TranslationPreset.custom
     @State private var key = ""
     @State private var replaceKey = false
+    @State private var stagePreview = true
     @State private var error = ""
     @State private var connectionMessage = ""
+    @State private var saving = false
+    @State private var saveTask: Task<Void, Never>?
     @State private var testID: UUID?
     @State private var testTask: Task<Void, Never>?
     private var provider: RemoteTranslationProvider? { .init(rawValue: engine) }
@@ -37,6 +41,11 @@ import SwiftUI
                 } else {
                     Text("使用 OpenAI 兼容服务。中文消息和 Claude 回复会发送到你指定的地址翻译；费用由该服务收取。")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
+                    Picker("服务预设", selection: $preset) {
+                        ForEach(TranslationPreset.allCases) { Text($0.name).tag($0) }
+                    }
+                    Text("密钥按接口保存；更换服务需另存密钥，模型由你选择。")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
                     field("接口地址", placeholder: "https://你的服务地址/v1", value: $baseURL)
                     field("模型名称", placeholder: "填写服务提供的模型名称", value: $aiModel)
                 }
@@ -55,24 +64,26 @@ import SwiftUI
                 Text("仅发送两句固定测试文字，不保存未提交的密钥，也不读取对话内容。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
+            Toggle("自动翻译稳定片段（关闭后等待完整消息）", isOn: $stagePreview).font(.system(size: 12))
             Divider()
             Text("唤出快捷键：Control + Option + E\n先点击目标输入框，再使用快捷键。\n自动发送可选择「回车」或「⌘ + 回车」。")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if !error.isEmpty { Text(error).foregroundStyle(.red).font(.system(size: 12)) }
             HStack {
                 Button("取消") { dismiss() }
                 Spacer()
-                Button("保存设置", action: save).buttonStyle(.borderedProminent).disabled(testID != nil)
+                Button("保存设置", action: save).buttonStyle(.borderedProminent).disabled(testID != nil || saving)
             }
         }.padding(26).frame(width: 460)
-        .onAppear { engine = model.engine; baseURL = model.baseURL; aiModel = model.aiModel; geminiModel = model.geminiModel }
+        .onAppear { engine = model.engine; baseURL = model.baseURL; aiModel = model.aiModel; geminiModel = model.geminiModel; stagePreview = model.replies.stagePreview }
         .onChange(of: engine) { cancelTest(); key = ""; replaceKey = false; error = "" }
-        .onChange(of: baseURL) { cancelTest() }
+        .onChange(of: preset) { if preset != .custom && baseURL != preset.baseURL { baseURL = preset.baseURL; aiModel = TranslationProfileMetadata.model(baseURL: baseURL) } }
+        .onChange(of: baseURL) { cancelTest(); key = ""; replaceKey = false }
         .onChange(of: aiModel) { cancelTest() }
         .onChange(of: geminiModel) { cancelTest() }
         .onChange(of: key) { cancelTest(); error = "" }
         .onChange(of: replaceKey) { cancelTest(); error = "" }
-        .onDisappear { cancelTest() }
+        .onDisappear { cancelTest(); saveTask?.cancel() }
     }
     private func field(_ label: String, placeholder: String, value: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -90,7 +101,10 @@ import SwiftUI
         let enteredKey = key; let useEnteredKey = replaceKey
         testTask = Task {
             do {
-                let credential = useEnteredKey ? enteredKey : try Credentials.read(for: provider)
+                let credential: String
+                if useEnteredKey { credential = enteredKey }
+                else { credential = try await Credentials.readAsync(for: provider, baseURL: base, allowPrompt: true) }
+                try Task.checkCancellation()
                 try await TranslationConnectionCheck.run(provider: provider, baseURL: base, model: selectedModel, key: credential)
                 guard testID == id, !Task.isCancelled else { return }
                 connectionMessage = "连接成功，中译英及英译中均已返回。"
@@ -102,12 +116,31 @@ import SwiftUI
         }
     }
     private func save() {
-        let previous = (model.engine, model.baseURL, model.aiModel, model.geminiModel)
-        model.engine = engine; model.baseURL = baseURL; model.aiModel = aiModel; model.geminiModel = geminiModel
-        do { try model.saveSettings(key: key, replaceKey: replaceKey); dismiss() }
-        catch {
-            model.engine = previous.0; model.baseURL = previous.1; model.aiModel = previous.2; model.geminiModel = previous.3
-            self.error = error.localizedDescription
+        guard !saving else { return }
+        let submitted = (engine, baseURL, aiModel, geminiModel, key, replaceKey, stagePreview)
+        saving = true; error = ""
+        saveTask = Task {
+            defer { saving = false; saveTask = nil }
+            do {
+                let provider = RemoteTranslationProvider(rawValue: submitted.0)
+                if submitted.0 == "ai" { _ = try AIProtocol.request(text: "测试", baseURL: submitted.1, model: submitted.2, key: "") }
+                else if submitted.0 == "gemini" { _ = try GeminiProtocol.endpoint(model: submitted.3) }
+                else if submitted.0 != "apple" { throw BridgeError.message("翻译方式无效，请重新选择。") }
+                if submitted.5, let provider {
+                    _ = try await TextTranslation.withDeadline(timeout: .seconds(10)) {
+                        try await Credentials.saveAsync(submitted.4.trimmingCharacters(in: .whitespacesAndNewlines), for: provider, baseURL: submitted.1)
+                        return ""
+                    }
+                }
+                try Task.checkCancellation()
+                guard engine == submitted.0, baseURL == submitted.1, aiModel == submitted.2, geminiModel == submitted.3, key == submitted.4, replaceKey == submitted.5 else { return }
+                let previous = (model.engine, model.baseURL, model.aiModel, model.geminiModel)
+                model.engine = submitted.0; model.baseURL = submitted.1; model.aiModel = submitted.2; model.geminiModel = submitted.3
+                do { try model.saveSettings(key: "", replaceKey: false); model.replies.stagePreview = submitted.6; dismiss() }
+                catch { model.engine = previous.0; model.baseURL = previous.1; model.aiModel = previous.2; model.geminiModel = previous.3; throw error }
+            } catch {
+                if !Task.isCancelled { self.error = error.localizedDescription }
+            }
         }
     }
 }

@@ -142,6 +142,32 @@ import Foundation
         ])
         guard ClaudeDecoder.messages(simple).first?.text == "Please restart." else { fputs("FAIL: flattened simple Claude reply\n", stderr); exit(1) }
         print("PASS: flattened simple Claude reply")
+        let research = ReplyNode(role: "AXGroup", label: "Message 2 of 2", children: [
+            .init(role: "AXGroup", children: [
+                .init(role: "AXHeading", label: "Claude responded: Research Hypothesis."),
+                .init(role: "AXStaticText", text: "Drafting a concise, neutral three-paragraph response."),
+                .init(role: "AXStaticText", text: "Drafting a concise, neutral three-paragraph response."),
+                .init(role: "AXStaticText", text: "Research Hypothesis."),
+                .init(role: "AXStaticText", text: " The study compares the two methods without assuming superiority.")
+            ])
+        ])
+        guard ClaudeDecoder.messages(research).first?.text == "Research Hypothesis.\n\n The study compares the two methods without assuming superiority." else {
+            fputs("FAIL: desktop thinking summaries before the author-marked answer must not be translated\n", stderr); exit(1)
+        }
+        print("PASS: author preview marks the formal answer after duplicated thinking summaries")
+        var thinkingOnly = research
+        thinkingOnly.children[0].children[0].label = "Claude responded:"
+        thinkingOnly.children[0].children = Array(thinkingOnly.children[0].children.prefix(3))
+        precondition(ClaudeDecoder.messages(thinkingOnly).isEmpty)
+        print("PASS: unmarked flat thinking text waits for the formal answer")
+        var repeatedFormal = research
+        repeatedFormal.children[0].children = [
+            .init(role: "AXHeading", label: "Claude responded: Keep this sentence."),
+            .init(role: "AXStaticText", text: "Keep this sentence."),
+            .init(role: "AXStaticText", text: "Keep this sentence.")
+        ]
+        precondition(ClaudeDecoder.messages(repeatedFormal).first?.text == "Keep this sentence.\n\nKeep this sentence.")
+        print("PASS: repeated formal paragraphs are preserved instead of globally deduplicated")
         let unnamedHeading = ReplyNode(role: "AXGroup", label: "Message 1 of 1", children: [
             .init(role: "AXGroup", children: [
                 .init(role: "AXHeading", children: [.init(role: "AXStaticText", text: "Claude responded: Please restart.")]),
@@ -191,6 +217,6 @@ import Foundation
         var gap = ReplyTracker(baseline: earlier, outbound: prompt.text, conversation: "https://claude.ai/chat/rolling")
         do { _ = try gap.observe(conversation: "https://claude.ai/chat/rolling", messages: earlier + [hugeReply], now: 0); fatalError("ordinal gap must stop") }
         catch { print("PASS: missing outbound ordinal cannot bind a different reply") }
-        print("27 reply tests passed")
+        print("30 reply tests passed")
     }
 }

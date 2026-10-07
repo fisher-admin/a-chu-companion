@@ -11,7 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var statusItem: NSStatusItem!
     var hotKey: EventHotKeyRef?
     var eventHandler: EventHandlerRef?
+    var wakeObserver: NSObjectProtocol?
     func applicationDidFinishLaunching(_ notification: Notification) {
+        KeychainAccess.prepare()
         Self.shared = self
         AppMenus.install()
         NSApp.setActivationPolicy(.accessory)
@@ -39,6 +41,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.model.recordReply(id: id, foreign: foreign, chinese: chinese, language: language)
         }
         model.replies.onReplyObserved = { [weak self] in self?.usage.refresh() }
+        model.bridge.onUsageAccount = { [weak self] observation in self?.usage.receiveAccount(observation) }
+        model.bridge.onUsage = { [weak self] evidence in self?.usage.receive(evidence) }
+        model.onClaudeConnection = { [weak self] channel, url in
+            guard let self else { return }
+            usage.follow(channel: channel, pageURL: url)
+            if channel == .web { usage.acquire(.web, pageURL: url) }
+        }
+        model.bridge.onUsageConnection = { [weak self] binding in
+            guard let self else { return }
+            guard let binding else { usage.stopFollowing(); return }
+            let channel: ClaudeUsageChannel = binding.hasPrefix("web-") ? .web : .cli
+            usage.follow(channel: channel, binding: binding)
+            usage.acquire(channel, binding: binding)
+        }
+        usage.requestReport = { [weak self] channel, binding, url in
+            guard let self else { throw CancellationError() }
+            if !model.bridge.enabled { model.bridge.start() }
+            guard model.bridge.enabled else { throw BridgeError.message(model.bridge.status) }
+            if channel == .web { try model.bridge.requestUsage(binding: binding, url: url) }
+            else { try await UsageAcquisition.run("request-cli") }
+        }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName:NSWorkspace.didWakeNotification,object:nil,queue:.main) { [weak self] _ in
+            Task { @MainActor in self?.model.refreshHealth() }
+        }
         usage.refresh()
         model.revealWindow = { [weak self] in self?.show(capture: false) }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -66,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     func show(capture: Bool) {
         if capture { model.prepareTarget() }
-        model.refreshPermission()
+        model.refreshHealth()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         DispatchQueue.main.async { [weak self] in
@@ -97,7 +123,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         show(capture: false); return true
     }
-    func applicationWillTerminate(_ notification: Notification) { model.replies.stop(); model.stopPermissionMonitoring(); usage.stop() }
+    func applicationWillTerminate(_ notification: Notification) {
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+        model.replies.stop(); model.bridge.stop(); model.stopPermissionMonitoring(); usage.stop()
+    }
 }
 
 @main struct AChuCompanionApp {

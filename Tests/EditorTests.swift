@@ -43,8 +43,8 @@ import AppKit
         precondition(reader.contentView.bounds.origin == position)
         print("PASS: unchanged long text preserves the reading position")
         LongMessageReader.updateText(reader, text: "中文头部。\n" + long, original: false)
-        precondition(reader.contentView.bounds.origin.y == 0 && body.string.hasPrefix("中文头部。"))
-        print("PASS: changed long text returns to the beginning and keeps the full body")
+        precondition(reader.contentView.bounds.origin == position && body.string.hasPrefix("中文头部。"))
+        print("PASS: changed long text preserves reading position and keeps the full body")
         for size: CGFloat in [12, 14, 16] {
             LongMessageReader.updateText(reader, text: body.string, original: false, fontSize: size)
             precondition(body.font?.pointSize == size && body.string.hasSuffix("COMPLETE-END"))

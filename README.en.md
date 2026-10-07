@@ -13,6 +13,14 @@ AChu Companion is a native macOS menu bar app that combines Chinese composition,
 
 This is an independent community project, not an Anthropic or official Claude product. It reduces copying and switching between tools, but does not guarantee that translated prompts are more accurate than the Chinese originals.
 
+## 1.1.7 development changes
+
+Formal originals appear immediately, while stable fragments are automatically translated before the whole turn ends. Existing Chinese prefixes, reading position, and text selection are preserved. Compatible-service credentials are isolated by endpoint; OpenAI/Grok presets retain separate model choices, while native Gemini stays unchanged. Passive health checks do not generate text.
+
+Usage/statusLine sources and read-only CLI/Chrome adapters remain experimental. After initial adapter setup, connecting a chat source automatically follows its usage without a separate usage-account confirmation. Settings provide supplementary acquisition and setup; unavailable identity clears previous values rather than falling back to another channel.
+
+**1.1.7 build58 is installed.** The full offline regression passed 28 groups with 429 declared checks. Background desktop composer verification was repaired; live Chat showed automatic usage connection, foreign-language sending, and formal text/table acquisition. Gemini also appended an unsolicited answer to a translated question and returned HTTP 503 during reverse translation. Full live acceptance for all three channels remains incomplete. See [current results and live steps](docs/testing/three-channel-active-usage-2026-10-07.md) and [bridge setup](Bridge/README.md). The [original simulation record](docs/testing/optimization-implementation-report.md) and [original live plan](docs/testing/real-environment-test-plan.md) retain their historical pre-installation state.
+
 ## Features
 
 - **Bidirectional translation:** Chinese to the selected language, completed foreign-language replies back to Chinese. macOS system translation is the default and requires no API key. Installed language packs are reused.
@@ -23,7 +31,8 @@ This is an independent community project, not an Anthropic or official Claude pr
 - **Conversation following and history:** Reading follows conversation changes in the same connected window. Reconnect the composer before sending to another conversation. Select from visible, completed historical replies for on-demand translation.
 - **Long-response reading:** New translations open at the beginning, with scrolling and expandable originals. Chinese text sizes are 12, 14, and 16; default 14. Language and text-size preferences persist.
 - **Temporary history:** Keep the latest ten completed reply translations during this run; clear on exit. Clearing records preserves drafts, the Claude conversation, and monitoring.
-- **Account usage:** Progress bars, used percentages, and reset times for reported five-hour and weekly limits. Refresh when replies are acquired. Use the desktop login or a specified session; missing data is not shown as zero.
+- **Account usage:** Connecting a chat automatically follows its Desktop, Web, or CLI source. Show reported five-hour/weekly percentages and reset times; settings supplement first-time adapter setup and acquisition. Missing data is not zero, and a repeated CLI report does not imply a fresh server query.
+- **Table translation:** Ordinary tables retain rows, columns and values, with horizontal scrolling and Markdown copy. Gemini uses bounded nearby text to disambiguate cell wording while remaining translation-only. Complex merged tables have not been verified.
 - **Code segments:** Formal text starts translating after about three seconds without changes, before another tool event or overall completion. A stable continuation updates its existing segment. Tool progress and output are excluded. Each segment counts toward the ten recent translation records.
 - **Native appearance:** A pig-head menu icon with a capital A, translucent materials following system appearance, and compact controls.
 
@@ -106,7 +115,9 @@ python3 Tools/check_repository.py --history
 
 GitHub CI performs repository checks, offline regressions, loopback HTTP tests, and certificate-free builds. CodeQL analyzes Swift, Python, and Actions workflows. It does not sign into Claude, send real messages, or install language packs. Language, identity, and actual Claude tests run separately; see [Contributing](CONTRIBUTING.md) and [Verification records](TEST_PLAN.md).
 
-The current app has 215 regression checks plus fourteen loopback HTTP checks, including Gemini bidirectional requests, credential separation, failure feedback, and adaptive long-text retries. Native validation covers continuous replies, slow responses, background reading, history selection, stop/resume, preferences, and replies approaching 50,000 characters. Actual Google calls and Desktop Code-mode checks are recorded separately in the verification document; terminal CLI chat is outside the supported scope. Untested browser/OS combinations are not presented as verified.
+The current offline regression has 28 groups with 429 declared checks; fourteen earlier loopback HTTP checks cover paragraph continuity, Gemini bidirectional requests, credential separation, failure feedback, and adaptive long-text retries. Historical native validation covers continuous replies, slow responses, background reading, history selection, stop/resume, preferences, and replies approaching 50,000 characters, with each result tied to its tested version. Actual Google calls, Desktop Code mode, and the experimental CLI adapter are recorded separately. Untested browser, terminal, and OS combinations are not presented as verified.
+
+Build41 removes injected line breaks around inline files, links and emphasis, and handles provider-added line breaks in the shared system/AI translation path while preserving genuine paragraphs, code, lists and table structure. See the [paragraph-layout record](docs/testing/paragraph-layout-2026-10-06.md) for simulations and native UI checks. Earlier Code tests demonstrated an early Chinese stage, but also recorded untranslated stages, table-semantic failures and an exceeded test budget; they do not establish full live acceptance. See the [2026-10-06 supplement report](docs/testing/real-code-supplement-results-2026-10-06.md).
 
 ## Community and license
 

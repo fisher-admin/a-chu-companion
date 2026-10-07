@@ -25,6 +25,10 @@ jobs:
           persist-credentials: false
       - name: Verify repository tooling
         run: python3 -m unittest discover -s Tests -p RepositoryChecksTests.py
+      - name: Read-only bridge protocol and temporary installation checks
+        run: |
+          python3 -m unittest discover -s Tests -p BridgeTests.py
+          node --test Tests/BridgeChromeTests.cjs Tests/BridgeWorkerTests.cjs
       - name: Validate documentation and audit history
         run: python3 Tools/check_repository.py --history
   macos:
@@ -44,6 +48,8 @@ jobs:
         run: ./test.sh
       - name: Local HTTP integration checks
         run: ./test-http.sh
+      - name: Local socket integration checks
+        run: ./test-bridge.sh
       - name: Build without local credentials or signing identity
         env:
           ACHU_SIGNING_CONFIG: /tmp/achu-ci-no-signing-config.json

@@ -4,11 +4,11 @@ import AppKit
 @main struct ModelTests {
     @MainActor static func main() async throws {
         _ = NSApplication.shared
-        let settings = ["targetLanguage", "replyTextSize", "engine", "baseURL", "aiModel", "geminiModel"].map { ($0, UserDefaults.standard.object(forKey: $0)) }
-        defer { for (key, value) in settings { UserDefaults.standard.set(value, forKey: key) } }
-        UserDefaults.standard.set("en", forKey: "targetLanguage")
-        UserDefaults.standard.removeObject(forKey: "replyTextSize")
-        UserDefaults.standard.removeObject(forKey: "geminiModel")
+        let settings = ["targetLanguage", "replyTextSize", "engine", "baseURL", "aiModel", "geminiModel"].map { ($0, CompanionPreferences.store.object(forKey: $0)) }
+        defer { for (key, value) in settings { CompanionPreferences.store.set(value, forKey: key) } }
+        CompanionPreferences.store.set("en", forKey: "targetLanguage")
+        CompanionPreferences.store.removeObject(forKey: "replyTextSize")
+        CompanionPreferences.store.removeObject(forKey: "geminiModel")
         let model = TranslatorModel(permissionCheck: { true }, applePreparationTimeout: .milliseconds(20), remoteKeyRead: { _ in "" })
         defer { model.cancel(); model.stopPermissionMonitoring() }
         precondition(model.geminiModel == "gemini-3.1-flash-lite")
@@ -33,7 +33,7 @@ import AppKit
         model.history = [.init(id: "old", isUser: false, chinese: "中文回复", foreign: "Existing reply.", language: .english)]
         for language in TranslationLanguage.allCases {
             model.language = language
-            precondition(UserDefaults.standard.string(forKey: "targetLanguage") == language.rawValue)
+            precondition(CompanionPreferences.store.string(forKey: "targetLanguage") == language.rawValue)
             precondition(model.input == "保留中文草稿" && model.history.first?.language == .english)
         }
         print("PASS: language choice persists while preserving the Chinese draft and old message language")
@@ -46,7 +46,10 @@ import AppKit
         try await waitUntil { !model.busy }
         precondition(!model.busy && model.isError && model.configuration == nil && model.input == "保留中文草稿")
         print("PASS: a missing system translation callback ends waiting and preserves the draft")
+        let rowsBeforeRetry = model.history.count
         model.begin(insert: false)
+        precondition(model.history.count == rowsBeforeRetry, "Retrying a failed translation must not duplicate the same unsent Chinese row")
+        print("PASS: retrying the same failed draft replaces its unsent row without duplicating it")
         model.cancel()
         let status = model.status
         try await Task.sleep(for: .milliseconds(70))
@@ -86,8 +89,13 @@ import AppKit
         model.recordReplyOriginal(id: "reply", foreign: raw, language: .english)
         precondition(model.history.count == 1 && model.history[0].chinese == "保存后运行。")
         print("PASS: successful translation updates the same bubble; identical originals do not erase it")
+        model.readingHistory = true
+        let revisionBeforeHistorySelection = model.chatRevision
+        model.replies.onManualReply("reply")
+        precondition(model.chatRevision > revisionBeforeHistorySelection && model.chatScrollTarget == "reply" && model.chatScrollAtTop)
+        print("PASS: explicitly selecting an existing history translation opens the selected reply at its beginning")
         model.recordReplyOriginal(id: "reply", foreign: raw + "\nNew ending.", language: .english)
-        precondition(model.history.count == 1 && model.history[0].chinese.isEmpty && model.history[0].foreign.hasSuffix("New ending."))
+        precondition(model.history.count == 1 && model.history[0].chinese == "保存后运行。" && model.history[0].foreign.hasSuffix("New ending."))
         model.replies.cancelTranslation(); model.replies.stop(clear: true)
         precondition(model.history.count == 1 && model.history[0].foreign.hasSuffix("New ending."))
         print("PASS: revised replies retire stale Chinese; cancellation and stopping preserve the complete original")
@@ -102,8 +110,16 @@ import AppKit
         model.replies.watching = true
         model.cancel()
         precondition(model.replies.watching, "Cancelling Chinese input must not stop continuous Claude reading")
+        model.readingHistory = true
+        model.recordReplyOriginal(id: "unseen-before-clear", foreign: "New reply while reading history.", language: .english)
+        precondition(model.hasNewContent, "An unread reply must produce the reminder before this clear test")
         model.clearHistory()
         precondition(model.replies.watching && model.chatScrollTarget == "bottom" && !model.chatScrollAtTop)
+        precondition(!model.hasNewContent && !model.readingHistory, "Clearing records must remove the stale new-content reminder and resume following")
+        model.recordReplyOriginal(id: "first-after-clear", foreign: "First reply after clearing.", language: .english)
+        precondition(model.history.count == 1 && model.chatScrollTarget == "first-after-clear" && model.chatScrollAtTop && !model.hasNewContent)
+        model.clearHistory()
+        print("PASS: clear removes the unread reminder and the next original follows normally")
         print("PASS: cancelling a send and clearing local chat preserve continuous reading")
         for number in 1...12 {
             model.recordReply(id: "saved-\(number)", foreign: "Reply \(number)", chinese: "译文 \(number)", language: .english)
@@ -111,7 +127,7 @@ import AppKit
         precondition(model.history.filter { !$0.isUser && !$0.chinese.isEmpty }.count == 10)
         precondition(model.history.first?.id == "saved-3" && model.history.last?.id == "saved-12")
         model.recordReply(id: "saved-3", foreign: "Reply 3", chinese: "再次翻译", language: .english)
-        precondition(model.history.count == 10 && model.history.last?.id == "saved-3")
+        precondition(model.history.count == 10 && model.history.first?.id == "saved-3")
         model.input = "清除记录时保留草稿"
         model.clearHistory()
         precondition(model.history.isEmpty && model.replies.watching && model.input == "清除记录时保留草稿")
@@ -120,7 +136,7 @@ import AppKit
         precondition(fresh.history.isEmpty && fresh.language == .german && fresh.replyTextSize == .large)
         fresh.stopPermissionMonitoring()
         print("PASS: a new application restores language and font size but has no persisted chat records")
-        print("19 multilingual model tests passed")
+        print("22 multilingual model tests passed")
     }
 
     @MainActor static func waitUntil(_ condition: () -> Bool) async throws {

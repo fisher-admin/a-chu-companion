@@ -28,17 +28,18 @@ struct MainView: View {
                 }.labelsHidden().frame(width: 100).disabled(model.busy || replies.translating)
                 Spacer(minLength: 8)
                 Circle().fill(model.hasTarget ? .green : .orange).frame(width: 7, height: 7)
-                Text(model.hasTarget ? model.targetName + (replies.watching ? " · 正在读取" : " · 读取已停止") : "未连接 Claude")
+                Text(model.hasTarget ? model.targetName + (replies.watching ? " · 正在读取" : " · 读取已停止") : (replies.watching ? replies.sourceName + " · 正在读取（只读）" : "未连接 Claude"))
                     .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                if model.hasTarget {
+                if model.hasTarget || replies.watching {
                     Button(replies.watching ? "停止读取" : "开始读取") {
-                        if replies.watching { replies.stop() } else { model.startReplyReading() }
+                        if replies.watching { model.bridge.stop(); replies.stop() } else { model.startReplyReading() }
                     }.controlSize(.mini).disabled(model.busy && !replies.watching)
                 }
                 Text(model.engine == "apple" ? "系统翻译" : model.engine == "gemini" ? "Gemini" : "AI 翻译").font(.system(size: 10)).foregroundStyle(.secondary)
                     .padding(.horizontal, 7).padding(.vertical, 4)
                     .background(Color.primary.opacity(0.05), in: Capsule())
             }.padding(.horizontal, 20).padding(.vertical, 8)
+            HealthSummaryView(health: model.health, bridge: model.bridge, refresh:model.refreshHealth)
             Divider()
             if !model.permission {
                 HStack {
@@ -54,6 +55,7 @@ struct MainView: View {
                 Picker("译文字号", selection: $model.replyTextSize) {
                     ForEach(ReplyTextSize.allCases) { size in Text(size.label).tag(size) }
                 }.pickerStyle(.segmented).labelsHidden().frame(width: 145).controlSize(.mini)
+                if model.hasNewContent { Button("有新内容") { model.resumeFollowing() }.controlSize(.mini) }
                 Button("清除记录", systemImage: "trash") { model.clearHistory() }
                     .controlSize(.mini).disabled(model.history.isEmpty)
                     .help("只清除伴侣中的记录，保留中文草稿并继续读取 Claude")
@@ -79,7 +81,13 @@ struct MainView: View {
                         ForEach(model.history) { item in ChatBubble(item: item, fontSize: model.replyTextSize.points).id(item.id) }
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(.leading, 18).padding(.trailing, 8).padding(.vertical, 12)
-                }.frame(minHeight: 260).scrollIndicators(.visible)
+                }.frame(minHeight: 180).scrollIndicators(.visible)
+                    .onScrollPhaseChange { _, phase in
+                        if phase == .interacting || phase == .tracking { model.readingHistory = true }
+                    }
+                    .onScrollGeometryChange(for: Bool.self) { geometry in
+                        geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 24
+                    } action: { _, atBottom in if atBottom { model.readingHistory = false } }
                     .task(id: model.chatRevision) {
                         await Task.yield()
                         guard !Task.isCancelled else { return }
@@ -122,7 +130,7 @@ struct MainView: View {
                             Text("写下你想说的话…").font(.system(size: 15)).foregroundStyle(.tertiary)
                                 .padding(.horizontal, 12).padding(.vertical, 12).allowsHitTesting(false)
                         }
-                    }.frame(height: 76)
+                    }.frame(height: min(160, max(76, CGFloat(model.input.split(separator: "\n", omittingEmptySubsequences: false).count) * 20 + 24)))
                     Text("回车提交 · Shift + 回车换行").font(.system(size: 10)).foregroundStyle(.secondary)
                 }.padding(12)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
@@ -139,7 +147,7 @@ struct MainView: View {
                         Spacer()
                         Text("正在处理…").font(.system(size: 12)).foregroundStyle(.secondary)
                     } else {
-                        Button("读取历史回复") { model.readVisibleReply() }.disabled(!model.hasTarget)
+                        Button("读取历史回复") { model.readVisibleReply() }.disabled(!model.hasTarget && model.bridge.selected.isEmpty)
                         Button("仅翻译") { model.begin(insert: false) }.disabled(model.input.count > InputPolicy.limit || model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         if !model.output.isEmpty { Button("填入译文") { model.insertResult() }.disabled(!model.hasTarget) }
                         Spacer(minLength: 0)
@@ -166,8 +174,13 @@ struct MainView: View {
             }
             .sheet(isPresented: $replies.showHistoryPicker) { VisibleReplyPicker(replies: replies) }
             .sheet(isPresented: $model.showSettings) { SettingsView(model: model) }
-            .sheet(isPresented: $usage.showConnection) { ClaudeUsageConnectionView(usage: usage) }
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.refreshPermission() }
+            .sheet(isPresented: $usage.showConnection) { ClaudeUsageConnectionView(usage: usage, prepareBridge: {
+                if !model.bridge.enabled { model.bridge.start() }
+                return model.bridge.connectionPath
+            }) }
+            .onAppear { model.refreshHealth() }
+            .onReceive(NotificationCenter.default.publisher(for: .achuReaderInteracted)) { _ in model.readingHistory = true }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.refreshHealth() }
     }
 }
 
@@ -208,9 +221,12 @@ struct ChatBubble: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label(item.isUser ? "你" : (item.chinese.isEmpty ? "Claude · 原文已读取" : "Claude · 中文译文"), systemImage: item.isUser ? "person.crop.circle" : "bubble.left")
                     .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                if item.updating && !item.chinese.isEmpty {
+                    Text("阶段性中文 · 后续片段正在更新").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
                 if !item.isUser && item.chinese.isEmpty {
                     MessageText(text: item.foreign, original: true)
-                    Text("中文译文将在翻译完成后显示。").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text("稳定片段将自动译成中文，无需等待整轮结束。").font(.system(size: 10)).foregroundStyle(.secondary)
                 } else { MessageText(text: item.chinese, fontSize: item.isUser ? 15 : fontSize) }
                 if !item.foreign.isEmpty && (item.isUser || !item.chinese.isEmpty) {
                     DisclosureGroup(item.language.name + "原文", isExpanded: $expanded) {
@@ -223,5 +239,39 @@ struct ChatBubble: View {
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(item.isUser ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.08)))
         }
+    }
+}
+
+struct HealthSummaryView: View {
+    @ObservedObject var health: HealthCenter
+    @ObservedObject var bridge: BridgeCoordinator
+    let refresh: () -> Void
+    @State private var expanded = false
+    var body: some View {
+        DisclosureGroup("状态检查", isExpanded: $expanded) {
+            ScrollView {
+                VStack(alignment:.leading,spacing:4) {
+                    HStack {
+                        Button(bridge.enabled ? "停止 CLI / Chrome 桥接" : "启用只读桥接（待真机验收）") { if bridge.enabled { bridge.stop() } else { bridge.start() } }
+                        if bridge.enabled { Button("复制连接文件路径") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(bridge.connectionPath, forType: .string) } }
+                    }.controlSize(.small)
+                    Text(bridge.status).font(.system(size: 12)).foregroundStyle(.secondary)
+                    ForEach(bridge.choices) { source in
+                        Button("读取 " + source.name) { bridge.select(source.id) }.controlSize(.small)
+                    }
+                    ForEach(health.items) { item in
+                        HStack(alignment: .top) {
+                            Text(item.name + " · " + item.state.rawValue).frame(width: 120, alignment: .leading)
+                            VStack(alignment:.leading,spacing:2) {
+                                Text(item.detail).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+                                if let url = item.officialURL { Link("官方政策说明",destination:url).font(.system(size:11)) }
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }.font(.system(size: 12)).padding(.vertical, 2)
+                    }
+                }
+            }.frame(height:100).scrollIndicators(.visible)
+        }.font(.system(size: 12)).padding(.horizontal, 20).padding(.vertical, 4)
+            .onChange(of:bridge.enabled) { refresh() }
+            .onChange(of:bridge.selected) { refresh() }
     }
 }

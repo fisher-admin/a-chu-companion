@@ -7,7 +7,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith('/gemini/'):
             if self.headers.get('X-goog-api-key') != 'dummy-gemini-key' or self.headers.get('Authorization') or 'systemInstruction' not in body:
                 self.send_response(400); self.end_headers(); return
-            text = body['contents'][0]['parts'][0]['text']
+            text = json.loads(body['contents'][0]['parts'][0]['text'])['source_text']
             if self.path.endswith('/redirect'):
                 self.send_response(307); self.send_header('Location', '/gemini/ok'); self.end_headers(); return
             if self.path.endswith('/quota'):

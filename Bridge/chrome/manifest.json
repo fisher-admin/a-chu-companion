@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "A畜伴侣只读桥接（待真实验收）",
+  "version": "1.1.7",
+  "description": "用户启用后读取 Claude 正式回复，并用当前网页会话只读查询额度，不读取或转发登录凭据。",
+  "permissions": ["nativeMessaging", "storage"],
+  "host_permissions": ["https://claude.ai/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_title": "开启或停止当前 Claude 页面读取"},
+  "content_scripts": [{"matches": ["https://claude.ai/*"], "js": ["parser.js", "usage.js", "content.js"], "run_at": "document_idle", "all_frames": false}]
+}

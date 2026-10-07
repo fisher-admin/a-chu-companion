@@ -6,6 +6,7 @@ struct ReplyNode: Sendable {
     var label: String = ""
     var text: String = ""
     var children: [ReplyNode] = []
+    var isStreamingAssistant = false
 }
 struct ChatMessage: Equatable, Sendable {
     enum Author: Sendable { case user, assistant }
@@ -42,7 +43,7 @@ enum ClaudeConversationPage {
     static func format(_ address: String) -> ClaudeTranscriptFormat? {
         guard let url = URL(string: address), url.scheme == "https", url.host == "claude.ai" else { return nil }
         let parts = url.path.split(separator: "/")
-        if parts.count == 2, parts[0] == "epitaxy" { return .code }
+        if (1...2).contains(parts.count), parts[0] == "epitaxy" { return .code }
         if parts.count >= 2, parts[0] == "chat" { return .chat }
         return ["/", "", "/new"].contains(url.path) ? .chat : nil
     }
@@ -62,10 +63,14 @@ struct CodeTranscriptBranch<Element> {
     let element: Element
     let ordinal: Int?
     var children: [CodeTranscriptBranch<Element>] = []
+    var author: ChatMessage.Author? = nil
+    var isStreamingAssistant = false
 }
 struct CodeTranscriptPiece<Element> {
     let element: Element
     let ordinal: Int?
+    var author: ChatMessage.Author? = nil
+    var isStreamingAssistant = false
 }
 
 struct ReplyTranslationLifecycle {
@@ -90,17 +95,35 @@ struct ReplyTranslationLifecycle {
 }
 
 enum ClaudeDecoder {
+    private struct BodyText {
+        let value: String
+        var joinsPrevious = false
+        var joinsNext = false
+        var block = false
+        var staticFileName = false
+    }
+    private static func joined(_ fragments: [BodyText], inlineWhitespace: Bool = true) -> String {
+        var result = ""; var previous: BodyText?
+        for fragment in fragments where !fragment.value.isEmpty {
+            if let previous {
+                let spacedInline = inlineWhitespace && !previous.block && !fragment.block &&
+                    ([" ", "\t"].contains(previous.value.last) || [" ", "\t"].contains(fragment.value.first))
+                if previous.block || fragment.block || (!previous.joinsNext && !fragment.joinsPrevious && !spacedInline) { result += "\n" }
+            }
+            result += fragment.value; previous = fragment
+        }
+        return result
+    }
     static func codeSegments(_ root: ReplyNode, responseComplete: Bool) -> [ChatMessage] {
         guard let n = position(root.label, format: .code)?.ordinal else { return [] }
-        let anchor = root.children.first { position($0.label, format: .code)?.ordinal == n } ?? root
-        guard let (_, author) = headingParent(anchor) else { return [] }
+        guard let author = codeAuthor(root, ordinal: n) else { return [] }
         let full = codeBody(root)
         // Keep the original per-reply limit: splitting cannot bypass it.
         if author == .user || full.count > ForeignTextPolicy.limit { return messages(root, format: .code) }
         var result: [ChatMessage] = []
-        var text: [String] = []
+        var text: [BodyText] = []
         func finish(_ completed: Bool) {
-            let value = text.joined(separator: "\n")
+            let value = joined(text)
             text = []
             guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             result.append(.init(ordinal: n, author: author, text: value, segment: result.count + 1, completed: completed))
@@ -173,8 +196,44 @@ enum ClaudeDecoder {
     // subtrees remain intact so tool-card and code-block boundaries survive.
     static func codeTranscriptPieces<Element>(_ branch: CodeTranscriptBranch<Element>) -> [CodeTranscriptPiece<Element>] {
         let nested = branch.children.flatMap(codeTranscriptPieces)
-        if nested.contains(where: { $0.ordinal != nil }) { return nested }
-        return [.init(element: branch.element, ordinal: branch.ordinal)]
+        if nested.contains(where: { $0.ordinal != nil || $0.isStreamingAssistant }) { return nested }
+        return [.init(element: branch.element, ordinal: branch.ordinal, author: branch.author, isStreamingAssistant: branch.isStreamingAssistant)]
+    }
+    static func codeStreamingPieces<Element>(_ pieces: [CodeTranscriptPiece<Element>]) throws -> [CodeTranscriptPiece<Element>] {
+        var result: [CodeTranscriptPiece<Element>] = []
+        var previous: (ordinal: Int, author: ChatMessage.Author?)?
+        for (index, piece) in pieces.enumerated() {
+            if piece.isStreamingAssistant {
+                // Only the explicit renderer container, after a verified user
+                // anchor in this transcript, may stand in for a missing ordinal.
+                guard let previous, previous.author == .user,
+                      previous.ordinal < Int.max,
+                      piece.ordinal == nil || piece.ordinal == previous.ordinal + 1,
+                      !pieces.dropFirst(index + 1).contains(where: { $0.ordinal != nil || $0.isStreamingAssistant }) else {
+                    throw ReplyReadPending(message: "Claude Code 流式回复边界尚未完整。")
+                }
+                result.append(.init(element: piece.element, ordinal: previous.ordinal + 1,
+                                    author: .assistant, isStreamingAssistant: true))
+            } else {
+                result.append(piece)
+                if let ordinal = piece.ordinal { previous = (ordinal, piece.author) }
+            }
+        }
+        return result
+    }
+    static func codeHeadingAuthor(role: String, label: String) -> ChatMessage.Author? {
+        guard role == "AXHeading" else { return nil }
+        if label.hasPrefix("You said:") { return .user }
+        if label.hasPrefix("Claude responded:") { return .assistant }
+        return nil
+    }
+    private static func codeAuthor(_ root: ReplyNode, ordinal: Int) -> ChatMessage.Author? {
+        let anchor = root.children.first { position($0.label, format: .code)?.ordinal == ordinal } ?? root
+        if let (_, author) = headingParent(anchor) { return author }
+        // Set only by the Code transcript collector after boundary validation.
+        if root.isStreamingAssistant, let first = root.children.first,
+           first.isStreamingAssistant || first.label == "Currently streaming message" { return .assistant }
+        return nil
     }
     private static func author(_ node: ReplyNode) -> ChatMessage.Author? {
         guard node.role == "AXHeading" else { return nil }
@@ -201,20 +260,43 @@ enum ClaudeDecoder {
     }
     private static func text(_ node: ReplyNode) -> String {
         if node.role == "AXToolbar" || author(node) != nil || ["AXButton", "AXPopUpButton", "AXCheckBox"].contains(node.role) { return "" }
-        if node.role == "AXStaticText" || node.role == "AXListMarker" { return node.text.isEmpty ? node.label : node.text }
-        if node.role == "AXLink" && node.children.isEmpty { return node.label }
-        return node.children.map(text).filter { !$0.isEmpty }.joined(separator: "\n")
+        if node.role == "AXStaticText" { return node.text.isEmpty ? node.label : node.text }
+        if node.role == "AXListMarker" {
+            let value = node.text.isEmpty ? node.label : node.text
+            return value.isEmpty || value.last?.isWhitespace == true ? value : value + " "
+        }
+        if node.role == "AXLink" { return node.children.isEmpty ? node.label : node.children.map(text).joined() }
+        if let table = tableText(node) { return table }
+        return joined(node.children.map { child in
+            BodyText(value: text(child), joinsPrevious: child.role == "AXLink",
+                     joinsNext: ["AXLink", "AXListMarker"].contains(child.role),
+                     block: !["AXStaticText", "AXLink", "AXListMarker"].contains(child.role))
+        })
     }
-    private enum CodeBodyPart { case text(String), tool }
+    private static func tableText(_ node: ReplyNode) -> String? {
+        guard node.role == "AXTable" else { return nil }
+        let rows = node.children.filter { $0.role == "AXRow" }.map { row in
+            row.children.map { text($0) }
+        }
+        guard let headers = rows.first, !headers.isEmpty, rows.allSatisfy({ $0.count == headers.count }) else { return nil }
+        return MarkdownTable.source(headers: headers, rows: Array(rows.dropFirst()))
+    }
+    private enum CodeBodyPart { case text(BodyText), tool }
     private static func codeBody(_ root: ReplyNode) -> String {
-        codeBodyParts(root).compactMap { part -> String? in
+        joined(codeBodyParts(root).compactMap { part -> BodyText? in
             if case .text(let value) = part { return value }; return nil
-        }.joined(separator: "\n")
+        })
     }
     private static func codeBodyParts(_ root: ReplyNode) -> [CodeBodyPart] {
+        func fileName(_ value: String) -> Bool {
+            !value.contains(where: \.isWhitespace) &&
+                ["md", "txt", "pdf", "py", "sh", "swift", "js", "ts", "json", "html", "css", "csv", "tsv"].contains((value as NSString).pathExtension.lowercased())
+        }
+        func inlineReference(_ value: String) -> Bool {
+            fileName(value) || value.range(of: #"^(?:~/|/)?[\p{L}\p{N}_.-]+(?:/[\p{L}\p{N}_.-]+)*/$"#, options: .regularExpression) != nil
+        }
         func fileReference(_ node: ReplyNode) -> Bool {
-            guard node.role == "AXButton", !node.label.contains(" ") else { return false }
-            return ["md", "txt", "pdf", "py", "sh", "swift", "js", "ts", "json", "html", "css"].contains((node.label as NSString).pathExtension.lowercased())
+            node.role == "AXButton" && fileName(node.label)
         }
         func activityButton(_ node: ReplyNode) -> Bool {
             node.role == "AXButton" && !fileReference(node) && !["Copy", "Copy code", "Copy to clipboard", "Fork from here", "Read aloud", "Retry", "Good response", "Bad response", "复制", "复制代码"].contains(node.label) && !node.label.hasPrefix("Show message actions")
@@ -237,17 +319,88 @@ enum ClaudeDecoder {
             for child in node.children { collectActivity(child) }
         }
         collectActivity(root)
+        // A container can contain inline links/files as separate AX nodes.
+        // Assemble them inside that container before joining paragraph siblings.
+        // Tool boundaries survive and continue to close individual Code stages.
+        func coalesce(_ parts: [CodeBodyPart], inlineWhitespace: Bool = true, preserveFileReference: Bool = true) -> [CodeBodyPart] {
+            var result: [CodeBodyPart] = []; var fragments: [BodyText] = []
+            func flush() {
+                // AX may wrap each inline span separately. Preserve the file
+                // marker through those wrappers, then join only a filename
+                // explicitly surrounded by sentence spacing/punctuation.
+                // Never remove literal newlines inside a text node.
+                var index = 1
+                while index + 1 < fragments.count {
+                    let before = fragments[index - 1], file = fragments[index], after = fragments[index + 1]
+                    if file.staticFileName, [" ", "\t"].contains(before.value.last),
+                       [" ", "\t", ".", ",", ";", ":", "!", "?", ")", "]"].contains(after.value.first) {
+                        let combined = BodyText(value: before.value + file.value + after.value,
+                                                joinsPrevious: before.joinsPrevious, joinsNext: after.joinsNext,
+                                                block: before.block || file.block || after.block)
+                        fragments.replaceSubrange((index - 1)...(index + 1), with: [combined])
+                        index = max(1, index - 1)
+                    } else { index += 1 }
+                }
+                if !inlineWhitespace {
+                    // Code's ordinal wrapper is flattened by AX. A static
+                    // filename with an explicit preceding inline space still
+                    // belongs to that sentence, including following punctuation.
+                    // Other flat paragraphs retain their existing boundaries.
+                    for index in fragments.indices where index > 0 && fragments[index].staticFileName {
+                        let before = fragments[index - 1]
+                        guard !before.block, [" ", "\t"].contains(before.value.last) else { continue }
+                        fragments[index].joinsPrevious = true
+                        if index + 1 < fragments.count {
+                            let after = fragments[index + 1]
+                            fragments[index].joinsNext = !after.block &&
+                                ([" ", "\t"].contains(after.value.first) ||
+                                 [".", ",", ";", ":", "!", "?", ")", "]"].contains(after.value.first))
+                        }
+                    }
+                }
+                let singleFile = preserveFileReference && fragments.count == 1 && fragments[0].staticFileName
+                let value = joined(fragments, inlineWhitespace: inlineWhitespace); fragments = []
+                if !value.isEmpty { result.append(.text(.init(value: value, block: true, staticFileName: singleFile))) }
+            }
+            for part in parts {
+                switch part {
+                case .text(let value): fragments.append(value)
+                case .tool: flush(); result.append(.tool)
+                }
+            }
+            flush(); return result
+        }
         func body(_ node: ReplyNode) -> [CodeBodyPart] {
             if author(node) != nil { return [] }
             if toolCard(node) || activityButton(node) { return [.tool] }
-            if fileReference(node) { return [.text(node.label)] }
+            if fileReference(node) { return [.text(.init(value: node.label, joinsPrevious: true, joinsNext: true))] }
             if ["AXToolbar", "AXButton", "AXPopUpButton", "AXCheckBox", "AXTextArea", "AXTextField"].contains(node.role) { return [] }
             if ["AXStaticText", "AXListMarker"].contains(node.role) {
                 let value = node.text.isEmpty ? node.label : node.text
-                return value.isEmpty || excluded.contains(activityKey(value)) ? [] : [.text(value)]
+                let marker = node.role == "AXListMarker"
+                let content = marker && value.last?.isWhitespace != true ? value + " " : value
+                return value.isEmpty || excluded.contains(activityKey(value)) ? [] : [.text(.init(value: content, joinsNext: marker, staticFileName: !marker && inlineReference(value)))]
             }
-            if node.role == "AXLink", node.children.isEmpty { return node.label.isEmpty ? [] : [.text(node.label)] }
-            return node.children.flatMap(body)
+            if node.role == "AXLink" {
+                let value = text(node)
+                return value.isEmpty ? [] : [.text(.init(value: value, joinsPrevious: true, joinsNext: true))]
+            }
+            if let table = tableText(node) { return [.text(.init(value: table, block: true))] }
+            if node.role == "AXGroup", node.isStreamingAssistant || node.label == "Currently streaming message" {
+                return coalesce(node.children.enumerated().flatMap { index, child in
+                    // This is the renderer's trailing activity group, not a
+                    // keyword filter over the assistant's actual paragraphs.
+                    let values = child.children.map { $0.text.isEmpty ? $0.label : $0.text }
+                    let footer = index > 0 && child.role == "AXGroup" && !values.isEmpty &&
+                        child.children.allSatisfy { $0.role == "AXStaticText" } && values.allSatisfy {
+                            ["running", "Working…", "Thinking…", "Working...", "Thinking..."].contains($0) ||
+                            $0.range(of: "^[0-9,.]+ tokens$", options: .regularExpression) != nil
+                        }
+                    return footer ? [] : body(child)
+                })
+            }
+            return coalesce(node.children.flatMap(body), inlineWhitespace: position(node.label, format: .code) == nil,
+                            preserveFileReference: node.label != "Code")
         }
         return body(root)
     }
@@ -256,8 +409,7 @@ enum ClaudeDecoder {
         func visit(_ node: ReplyNode) {
             if let n = position(node.label, format: format)?.ordinal {
                 if format == .code {
-                    let anchor = node.children.first { position($0.label, format: .code)?.ordinal == n } ?? node
-                    guard let (_, author) = headingParent(anchor) else { return }
+                    guard let author = codeAuthor(node, ordinal: n) else { return }
                     let value = codeBody(node)
                     if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         result.append(.init(ordinal: n, author: author, text: value))
@@ -272,7 +424,7 @@ enum ClaudeDecoder {
                     (["AXStaticText", "AXButton"].contains(node.role) ? [node.text.isEmpty ? node.label : node.text] : []) + node.children.flatMap(allText)
                 }
                 let statusText = Set(controlGroups.flatMap(allText) + controlGroups.filter { $0.role == "AXButton" }.map(\.label))
-                let body = parent.children.enumerated().compactMap { index, child -> String? in
+                let bodyPieces = parent.children.enumerated().compactMap { index, child -> (Int, String)? in
                     guard self.author(child) == nil, !hasControls(child) else { return nil }
                     var value = text(child)
                     // Desktop flattens a tool card into status text, a button,
@@ -289,8 +441,22 @@ enum ClaudeDecoder {
                         }
                     }
                     guard !value.isEmpty, !statusText.contains(value) else { return nil }
-                    return value
-                }.joined(separator: "\n\n")
+                    return (index, value)
+                }
+                // The author heading previews the formal answer. New desktop
+                // builds expose thinking summaries as flat siblings before it.
+                let heading = parent.children.first { self.author($0) == author }
+                let names = heading.map { [$0.label, $0.text] + $0.children.filter { $0.role == "AXStaticText" }.map { $0.text.isEmpty ? $0.label : $0.text } } ?? []
+                let marker = author == .assistant ? "Claude responded:" : "You said:"
+                let preview = normalize(String((names.first { $0.hasPrefix(marker) } ?? marker).dropFirst(marker.count)))
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "…"))
+                let formalStart = preview.isEmpty ? nil : bodyPieces.first { _, value in
+                    let candidate = normalize(value)
+                    return !candidate.isEmpty && (candidate.hasPrefix(preview) || preview.hasPrefix(candidate))
+                }?.0
+                let flatOnly = !bodyPieces.isEmpty && bodyPieces.allSatisfy { parent.children[$0.0].role == "AXStaticText" }
+                if author == .assistant, flatOnly, formalStart == nil { return }
+                let body = bodyPieces.filter { formalStart == nil || $0.0 >= formalStart! }.map(\.1).joined(separator: "\n\n")
                 if !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     result.append(.init(ordinal: n, author: author, text: body))
                 }

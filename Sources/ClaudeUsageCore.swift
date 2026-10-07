@@ -19,6 +19,7 @@ enum ClaudeUsageError: LocalizedError {
 struct ClaudeUsageWindow: Equatable, Sendable {
     let usedPercentage: Double
     let resetsAt: Date?
+    var resetDescription: String? = nil
 }
 
 enum ClaudeUsageDisplay {

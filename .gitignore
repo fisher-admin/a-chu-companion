@@ -20,3 +20,9 @@ signing.json
 .venv/
 __pycache__/
 *.py[cod]
+
+# Private orchestration state and disposable simulation artifacts.
+.omx/
+output/
+connection.json
+achu-bridge-install.json

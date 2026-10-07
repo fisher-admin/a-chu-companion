@@ -2,30 +2,9 @@
 set -euo pipefail
 cd "${0:A:h}"
 mkdir -p .build/cache
-swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swift Sources/GeminiTranslation.swift Tests/CoreTests.swift -o .build/core-tests
-swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swift Sources/GeminiTranslation.swift Tests/GeminiTests.swift -o .build/gemini-tests
-.build/gemini-tests
-.build/core-tests
-swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swift Sources/GeminiTranslation.swift Sources/Editor.swift Sources/MessageText.swift Tests/EditorTests.swift -o .build/editor-tests
-.build/editor-tests
-swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swift Sources/GeminiTranslation.swift Sources/ReplyCore.swift Tests/ReplyTests.swift -o .build/reply-tests
-.build/reply-tests
-swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swift Sources/GeminiTranslation.swift Sources/ReplyCore.swift Sources/ConversationReplyTracker.swift Sources/ReplyWorkQueue.swift Tests/ConversationReplyTests.swift -o .build/conversation-tests
-.build/conversation-tests
-swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swift Sources/GeminiTranslation.swift Sources/ReplyCore.swift Sources/ConversationReplyTracker.swift Tests/CodeReplyTests.swift -o .build/code-reply-tests
-.build/code-reply-tests
-swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swift Sources/GeminiTranslation.swift Sources/ReplyCore.swift Sources/ConversationReplyTracker.swift Sources/ReplyWorkQueue.swift Tests/CodeSegmentTests.swift -o .build/code-segment-tests
-.build/code-segment-tests
-swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/AccessibilityPermissionMonitor.swift Sources/Core.swift Sources/GeminiTranslation.swift Sources/ReplyCore.swift Sources/ConversationReplyTracker.swift Sources/ReplyWorkQueue.swift Sources/ClaudeAccessibility.swift Sources/TargetBridge.swift Sources/Credentials.swift Sources/ReplyMonitor.swift Sources/TranslatorModel.swift Sources/ReaderPreferences.swift Sources/TextTranslation.swift Tests/PermissionTests.swift -o .build/permission-tests
-.build/permission-tests
-
-swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/Core.swift Sources/GeminiTranslation.swift Sources/TextTranslation.swift Tests/TranslationPipelineTests.swift -o .build/translation-pipeline-tests
-.build/translation-pipeline-tests
-
-swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/AccessibilityPermissionMonitor.swift Sources/Core.swift Sources/GeminiTranslation.swift Sources/ReplyCore.swift Sources/ConversationReplyTracker.swift Sources/ReplyWorkQueue.swift Sources/ClaudeAccessibility.swift Sources/TargetBridge.swift Sources/Credentials.swift Sources/ReplyMonitor.swift Sources/TranslatorModel.swift Sources/ReaderPreferences.swift Sources/TextTranslation.swift Tests/ModelTests.swift -o .build/model-tests
-.build/model-tests
-
-swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/ClaudeUsageCore.swift Tests/UsageTests.swift -o .build/usage-tests
-.build/usage-tests
-swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/ClaudeUsageCore.swift Sources/ClaudeDesktopSession.swift Sources/ClaudeUsageMonitor.swift Tests/UsageMonitorTests.swift -o .build/usage-monitor-tests
-.build/usage-monitor-tests
+sources=(Sources/*.swift)
+sources=("${(@)sources:#Sources/Main.swift}")
+for suite in Core Gemini Editor Reply ConversationReply CodeReply CodeSegment Table TranslationContext Paragraph Protection CredentialAccess KeychainPolicy Permission TranslationPipeline Model Usage UsageMonitor UsageAccount Optimization SupportOptimization BridgeProtocol IncrementalReply OptimizationLifecycle StageReplay StructureEdge HealthManifest ReadRecovery; do
+    swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" "${sources[@]}" "Tests/${suite}Tests.swift" -o ".build/${suite}-tests"
+    ".build/${suite}-tests" --simulation
+done

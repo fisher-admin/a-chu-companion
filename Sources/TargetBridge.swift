@@ -1,8 +1,16 @@
 import AppKit
 import ApplicationServices
+import OSLog
 
 @MainActor
 final class TargetBridge {
+    struct ComposerIdentity: Equatable {
+        let role: String
+        let identifier: String?
+        let description: String?
+        let placeholder: String?
+        var permitsRecovery: Bool { identifier != nil || description != nil || placeholder != nil }
+    }
     struct Target {
         let app: NSRunningApplication
         let element: AXUIElement
@@ -10,6 +18,7 @@ final class TargetBridge {
         let value: String?
         let selection: NSRange?
         let conversation: String?
+        let identity: ComposerIdentity
         var name: String { app.localizedName ?? "目标软件" }
     }
     enum Outcome { case inserted, sendKeyPressed, unconfirmed }
@@ -37,6 +46,19 @@ final class TargetBridge {
         guard AXValueGetValue(value, .cfRange, &range), range.location >= 0, range.length >= 0 else { return nil }
         return NSRange(location: range.location, length: range.length)
     }
+    private static func identity(_ element: AXUIElement) -> ComposerIdentity {
+        func text(_ name: String) -> String? {
+            guard let value = attribute(element, name) as? String, !value.isEmpty else { return nil }
+            return value
+        }
+        return .init(role: text(kAXRoleAttribute) ?? "", identifier: text(kAXIdentifierAttribute),
+                     description: text(kAXDescriptionAttribute), placeholder: text("AXPlaceholderValue"))
+    }
+    private static func editable(_ element: AXUIElement) -> Bool {
+        [kAXTextAreaRole, kAXTextFieldRole, kAXComboBoxRole].contains(attribute(element, kAXRoleAttribute) as? String ?? "") &&
+            (attribute(element, kAXSubroleAttribute) as? String) != kAXSecureTextFieldSubrole &&
+            (attribute(element, kAXEnabledAttribute) as? Bool) != false
+    }
     static func capture() throws -> Target {
         guard trusted else { throw BridgeError.message("请先在系统设置中允许「A畜伴侣」使用辅助功能，再回到聊天输入框按 ⌃⌥E。") }
         guard let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
@@ -56,7 +78,8 @@ final class TargetBridge {
             throw BridgeError.message("尚未识别到可输入文字的对话框。请点击聊天输入框后再按 ⌃⌥E；仍不支持时可使用「仅翻译」和「复制译文」。")
         }
         return Target(app: app, element: element, window: window,
-                      value: attribute(element, kAXValueAttribute) as? String, selection: selectedRange(element), conversation: conversationURL(element))
+                      value: attribute(element, kAXValueAttribute) as? String, selection: selectedRange(element),
+                      conversation: conversationURL(element), identity: identity(element))
     }
     static func conversationURL(_ element: AXUIElement) -> String? {
         var cursor: AXUIElement? = element
@@ -74,20 +97,100 @@ final class TargetBridge {
         return nil
     }
     static func refresh(_ target: Target) throws -> Target {
-        let current = try validatedConversation(target)
-        return Target(app: target.app, element: target.element, window: target.window,
-                      value: target.value, selection: target.selection, conversation: current)
+        guard trusted, !target.app.isTerminated else { throw BridgeError.message("目标软件已关闭或辅助功能权限不可用。") }
+        let app = AXUIElementCreateApplication(target.app.processIdentifier)
+        AXUIElementSetMessagingTimeout(app, 0.2)
+        guard let windows = attribute(app, kAXWindowsAttribute) as? [AXUIElement],
+              windows.contains(where: { CFEqual($0, target.window) }) else {
+            throw BridgeError.message("原输入框未能重新确认，请点击 Claude 输入框后再按 ⌃⌥E。")
+        }
+        AXUIElementSetMessagingTimeout(target.element, 0.2)
+        func source(_ focused: AXUIElement?) -> TargetRefreshPolicy.ComposerSource {
+            TargetRefreshPolicy.composerSource(
+                focusedEditable: focused.map(editable) ?? false,
+                focusUnavailable: focused == nil || focused.flatMap { attribute($0, kAXRoleAttribute) as? String } == "AXWebArea",
+                companionActive: NSApp.isActive || NSApp.keyWindow?.isKeyWindow == true,
+                capturedEditable: editable(target.element))
+        }
+        let focused = elementAttribute(app, kAXFocusedUIElementAttribute)
+        let candidate = source(focused)
+        let element: AXUIElement
+        switch candidate {
+        case .focused: element = focused!
+        case .captured:
+            // Electron may report only its page while the companion has focus.
+            // Retain only the original live composer; delivery still verifies focus.
+            guard elementAttribute(app, kAXFocusedWindowAttribute).map({ CFEqual($0, target.window) }) != false else {
+                throw BridgeError.message("Claude 窗口已改变，请重新连接输入框。")
+            }
+            element = target.element
+        case .none:
+            throw BridgeError.message("原输入框未能重新确认，请点击 Claude 输入框后再按 ⌃⌥E。")
+        }
+        guard let window = elementAttribute(element, kAXWindowAttribute) ?? elementAttribute(app, kAXFocusedWindowAttribute) else {
+            throw BridgeError.message("原输入框所属窗口未能重新确认，请重新连接。")
+        }
+        AXUIElementSetMessagingTimeout(element, 0.2)
+        let current = conversationURL(element)
+        let value = attribute(element, kAXValueAttribute) as? String
+        let selection = selectedRange(element)
+        let sameElement = CFEqual(element, target.element)
+        let nextFocused = elementAttribute(app, kAXFocusedUIElementAttribute)
+        let stableFocus = candidate == .focused ? nextFocused.map { CFEqual($0, element) } == true :
+            source(nextFocused) == .captured &&
+            elementAttribute(app, kAXFocusedWindowAttribute).map { CFEqual($0, target.window) } != false
+        let stable = stableFocus && editable(element) &&
+            conversationURL(element) == current && attribute(element, kAXValueAttribute) as? String == value &&
+            selectedRange(element) == selection
+        guard TargetRefreshPolicy.canRecapture(appAlive: !target.app.isTerminated,
+                                                sameWindow: CFEqual(window, target.window),
+                                                sameConversation: current == target.conversation,
+                                                sameElement: sameElement,
+                                                verifiedIdentity: target.identity.permitsRecovery && identity(element) == target.identity,
+                                                knownConversation: current != nil, stable: stable) else {
+            throw BridgeError.message("Claude 会话或输入框已改变。请点击原会话输入框后再按 ⌃⌥E，防止发错对话。")
+        }
+        // Each job receives a new value/caret snapshot. Delivery never migrates
+        // that snapshot if the element changes while translation is running.
+        return Target(app: target.app, element: element, window: window, value: value, selection: selection,
+                      conversation: current, identity: target.identity)
     }
     private static func validatedConversation(_ target: Target) throws -> String? {
         guard !target.app.isTerminated else { throw BridgeError.message("目标软件已关闭，请重新选择输入框。") }
         let current = conversationURL(target.element)
-        let initialTransition = target.conversation?.hasSuffix("/new") == true && current?.contains("claude.ai/chat/") == true
         guard TargetRefreshPolicy.canReuseTarget(appAlive: !target.app.isTerminated,
                                                  sameConversation: current == target.conversation,
-                                                 initialNewConversationTransition: initialTransition) else {
+                                                 initialNewConversationTransition: false) else {
             throw BridgeError.message("Claude 已切换到其他会话。请重新按 ⌃⌥E 连接，防止发错对话。")
         }
         return current
+    }
+    static func bindingAfterOwnSend(_ target: Target) async -> Target? {
+        guard let initial = target.conversation, OwnSendTransition.newKind(initial) != nil else { return target }
+        // Only this immediately post-Return path can consume the new -> saved
+        // route transition. An unresolved result never authorizes another send.
+        var transition = OwnSendTransition(initial: initial)
+        let deadline = Date().addingTimeInterval(2)
+        let app = AXUIElementCreateApplication(target.app.processIdentifier)
+        AXUIElementSetMessagingTimeout(app, 0.1)
+        while Date() < deadline, !Task.isCancelled, !target.app.isTerminated {
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.app.processIdentifier else { return nil }
+            if let element = elementAttribute(app, kAXFocusedUIElementAttribute), editable(element),
+               let window = elementAttribute(element, kAXWindowAttribute), CFEqual(window, target.window),
+               CFEqual(element, target.element) || (target.identity.permitsRecovery && identity(element) == target.identity) {
+                AXUIElementSetMessagingTimeout(element, 0.1)
+                switch transition.observe(conversationURL(element)) {
+                case .pinned(let current):
+                    return Target(app: target.app, element: element, window: window,
+                                  value: attribute(element, kAXValueAttribute) as? String,
+                                  selection: selectedRange(element), conversation: current, identity: target.identity)
+                case .invalid: return nil
+                case .waiting: break
+                }
+            }
+            do { try await Task.sleep(for: .milliseconds(50)) } catch { return nil }
+        }
+        return nil
     }
     static func matches(_ target: Target) -> Bool {
         guard !target.app.isTerminated else { return false }
@@ -165,7 +268,25 @@ final class TargetBridge {
             stableMatches = pasteConfirmed() ? stableMatches + 1 : 0
             if stableMatches >= 3 { confirmed = true; break }
         }
-        guard confirmed, pasteConfirmed() else { return .unconfirmed }
+        guard confirmed, pasteConfirmed() else {
+            let actual = attribute(target.element, kAXValueAttribute) as? String
+            let expected = target.value.flatMap { DeliveryPolicy.expectedValue(before: $0, range: target.selection, inserted: text) }
+            // Counts and whitespace flags only. Never log the draft or translation.
+            let facts: [String: Any] = ["beforeUTF16": target.value?.utf16.count ?? -1,
+                                      "actualUTF16": actual?.utf16.count ?? -1,
+                                      "expectedUTF16": expected?.utf16.count ?? -1,
+                                      "insertedUTF16": text.utf16.count,
+                                      "webComposer": target.conversation != nil,
+                                      "selectionLocation": target.selection?.location ?? -1,
+                                      "selectionLength": target.selection?.length ?? -1,
+                                      "beforeOnlyNewlines": target.value.map { !$0.isEmpty && $0.allSatisfy { $0 == "\n" || $0 == "\r" } } ?? false,
+                                      "actualEqualsInserted": actual == text,
+                                      "actualHasFinalLF": actual?.hasSuffix("\n") ?? false]
+            if let data = try? JSONSerialization.data(withJSONObject: facts), let metadata = String(data: data, encoding: .utf8) {
+                Logger(subsystem: "local.achu.companion", category: "delivery").notice("Unconfirmed paste metadata: \(metadata, privacy: .public)")
+            }
+            return .unconfirmed
+        }
         guard autoSend else { return .inserted }
         try Task.checkCancellation()
         guard matches(target) else { throw BridgeError.message("输入焦点已改变，未自动发送。") }

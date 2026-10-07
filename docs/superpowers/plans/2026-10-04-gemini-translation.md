@@ -30,7 +30,7 @@
 - [x] Reset typed keys when switching provider; retire tests on field changes or dismissal. Saving retains unrelated provider preferences/keys and rolls back on failure.
 - [ ] Verify the installed sheet visually, provider switching, test feedback and preference persistence. User enters the real key locally for live Google verification.
 
-Installed build32/33 settings and persisted provider/model/key were verified. Native live checks with the user-entered key return Google's explicit project-access denial (403 PERMISSION_DENIED), so successful bidirectional Google translation remains blocked by project access. Build33 safely classifies that denial without revealing remote text; no project permission, credential restriction, or billing changes were made.
+Installed build32/33 settings and persisted provider/model/key were verified. Initial native live checks returned Google's explicit project-access denial (403 PERMISSION_DENIED); build33 safely classifies that denial without revealing remote text. The user subsequently changed the key and restored project access, reporting Free Tier. Native bidirectional Google connection verification and the main-screen translation-only flow now pass with fixed synthetic text. Earlier failure evidence remains in TEST_PLAN. The agent made no project permission, credential restriction, or billing changes.
 
 ## 4. Delivery and evidence
 

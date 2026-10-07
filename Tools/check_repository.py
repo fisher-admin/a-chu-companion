@@ -24,6 +24,7 @@ DUMMY = {
     "Tests/UsageMonitorTests.swift": {"sk-ant-" + "sid01-fixtureonlyabcdefghijklmnop"},
 }
 PATTERNS = (
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])")),
     ("Claude session", re.compile(r"sk-ant-sid\d+-[A-Za-z0-9_-]{8,}")),
     ("Anthropic API key", re.compile(r"sk-ant-api\d+-[A-Za-z0-9_-]{16,}")),
     ("GitHub token", re.compile(r"(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})")),
