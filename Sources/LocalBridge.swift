@@ -109,7 +109,22 @@ final class LocalBridge: @unchecked Sendable {
     deinit { stop() }
 }
 
-struct BridgeChoice: Identifiable { let id: String; var name: String { id.hasPrefix("web-") ? "Claude 网页 · " + String(id.suffix(6)) : "Claude CLI · " + String(id.suffix(6)) } }
+struct BridgeChoice: Identifiable {
+    let id: String
+    var source: BridgeSourceDetails? = nil
+    var reportedAt: Date? = nil
+    var hasReplies = false
+    var name: String {
+        let label = id.hasPrefix("web-") ? "Claude 网页 · " : "Claude CLI · "
+        return label + String(id.suffix(6)) + (source?.workspace.map { " · " + $0 } ?? "")
+    }
+    var reportDescription: String {
+        guard let reportedAt else { return "报告时间未知" }
+        let minutes = max(0, Int(Date().timeIntervalSince(reportedAt) / 60))
+        if minutes == 0 { return "刚收到报告" }
+        return "\(minutes)分钟前收到报告"
+    }
+}
 @MainActor final class BridgeCoordinator: ObservableObject {
     @Published private(set) var enabled = false
     @Published private(set) var choices: [BridgeChoice] = []
@@ -129,6 +144,13 @@ struct BridgeChoice: Identifiable { let id: String; var name: String { id.hasPre
     private var visible: [String: Set<ReplyAddress>] = [:]
     private var received: [String: Date] = [:]
     private var clock: Task<Void, Never>?
+    var cliChoices: [BridgeChoice] {
+        choices.filter { $0.id.hasPrefix("cli-") }.sorted {
+            if $0.reportedAt != $1.reportedAt { return ($0.reportedAt ?? .distantPast) > ($1.reportedAt ?? .distantPast) }
+            return $0.id < $1.id
+        }
+    }
+    var selectedName: String { choices.first { $0.id == selected }?.name ?? BridgeChoice(id: selected).name }
     var visibleHistory: [ReplyWork] {
         guard let snapshot = snapshots[selected] else { return [] }
         return snapshot.messages.filter { $0.author == .assistant && $0.completed == true && visible[selected, default: []].contains($0.address) }.map { .init(candidate: .init(ordinal: $0.ordinal, text: $0.text, segment: $0.segment), conversation: snapshot.conversation, manual: true) }
@@ -148,7 +170,20 @@ struct BridgeChoice: Identifiable { let id: String; var name: String { id.hasPre
             let update = try decoder.accept(data, token: server.token)
             if update.needsSync { status = "缺少消息批次，等待新消息或完整快照；不猜测缺失内容。"; return false }
             if update.waitingForBatch { status = "收到先到的后续批次，正在等待前序正文；不显示缺段内容。"; return true }
+            if update.duplicate { return true }
             if !choices.contains(where: { $0.id == update.binding }) { choices.append(.init(id: update.binding)) }
+            let now = Date()
+            received[update.binding] = now
+            if let index = choices.firstIndex(where: { $0.id == update.binding }) {
+                choices[index].reportedAt = now
+                if let source = update.source {
+                    let previous = choices[index].source
+                    choices[index].source = .init(workspace: source.workspace ?? previous?.workspace, model: source.model ?? previous?.model)
+                }
+                if let snapshot = update.snapshot {
+                    choices[index].hasReplies = snapshot.messages.contains { $0.author == .assistant && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                }
+            }
             if let observation = update.accountObservation { onUsageAccount(observation) }
             if let evidence = update.evidence { onUsage(evidence) }
             if let snapshot = update.snapshot {

@@ -1,5 +1,17 @@
 # A畜伴侣只读桥接 / Read-only bridge
 
+## build68：CLI 会话选择与复制译文
+
+主界面点击「连接 CLI」，或在已登录的 Claude Code 终端按实体键盘 **Control＋Option＋E**，打开会话选择页。对照终端底部「A畜伴侣 CLI · 编号」选择同一编号；候选显示目录末级名、模型、最近接收报告时间及正文状态，不按终端品牌识别，也不自动猜选最新会话。不同会话分别保留；同一 session_id 切换工作目录保持同一连接。目录只传末级名，不传完整路径。
+
+连接后中文按回车或「仅翻译」得到外文，点击「复制译文」，回到 Claude Code 按 **⌘V** 粘贴并确认发送。每条已完成的中文发送记录也有「复制译文」，清空或修改草稿后仍可复制历史外文。CLI 连接为只读，不显示无法使用的自动发送控件，不向终端模拟回车。已有用户状态栏仍保留；收到额度报告不代表已收到回复，也不代表服务器刷新。
+
+来源摘要为可选字段，旧报文仍兼容。升级只迁移精确匹配的本会话旧账户状态，保留失效或冲突身份隔离及原文件；不猜测当前登录，也不扫描全部聊天。正式回复入口仍须核实当前 Claude Code 的 MessageDisplay 支持，只有 statusLine 不能读取正文。
+
+English: Open **Connect CLI**, or press physical **Control+Option+E** in Claude Code, then match the companion's session identifier to the terminal footer. Directory basename, model, local report time and body status distinguish candidates without depending on terminal brand or automatically selecting one. A session keeps its identity across directory changes. Translate Chinese, click **Copy translation**, paste with **⌘V**, then confirm submission in the terminal. Completed outgoing history retains its own copy action. User status-line output and invalidated-account isolation are preserved. Status-line usage alone does not supply reply text; MessageDisplay support must be verified separately.
+
+下面保留历史版本的配置和验收记录；当前 CLI 界面操作以上述流程为准。[本次修复记录](../docs/testing/cli-workflow-repair-2026-10-07.md)。
+
 ## build56：连接聊天时自动取得对应额度
 
 额度跟随所连接的聊天来源；设置的获取按钮是补充。首次安装入口后，桌面绑定、网页绑定或只读 CLI 来源选择会自动核对并获取本来源额度，不需要再勾选账户连接。切换来源先隐藏旧值，不将另一端登录混入当前来源。

@@ -27,16 +27,12 @@ struct MainView: View {
                     ForEach(TranslationLanguage.allCases) { language in Text(language.name).tag(language) }
                 }.labelsHidden().frame(width: 100).disabled(model.busy || replies.translating)
                 Spacer(minLength: 8)
-                Circle().fill(model.hasTarget ? .green : .orange).frame(width: 7, height: 7)
+                Circle().fill(model.hasTarget || replies.watching ? .green : .orange).frame(width: 7, height: 7)
                 Text(model.hasTarget ? model.targetName + (replies.watching ? " · 正在读取" : " · 读取已停止") : (replies.watching ? replies.sourceName + " · 正在读取（只读）" : "未连接 Claude"))
-                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).help(model.hasTarget ? model.targetName : replies.sourceName)
                 if !model.hasTarget {
-                    Menu("连接 CLI") {
-                        Button("获取 CLI 会话") { model.connectCLI() }
-                        ForEach(model.bridge.choices.filter { $0.id.hasPrefix("cli-") }) { source in
-                            Button("读取 " + source.name) { model.bridge.select(source.id) }
-                        }
-                    }.menuStyle(.borderlessButton).fixedSize().disabled(model.busy)
+                    Button("连接 CLI") { model.connectCLI(releaseSelection: false) }
+                        .controlSize(.mini).fixedSize().disabled(model.busy)
                 }
                 if model.hasTarget || replies.watching {
                     Button(replies.watching ? "停止读取" : "开始读取") {
@@ -80,13 +76,18 @@ struct MainView: View {
                                 Text("用中文，和 Claude 聊。").font(.system(size: 22, weight: .semibold))
                                 Text("消息译成所选语言，回复自动译回中文。\n在这里写消息、看回复，继续同一个对话。")
                                     .font(.system(size: 13)).foregroundStyle(.secondary).lineSpacing(5)
-                                if !model.hasTarget {
+                                if model.isCLIConnection {
+                                    Label("中文译文可复制后回终端粘贴；回复将自动读取", systemImage: "doc.on.doc")
+                                        .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 4)
+                                } else if !model.hasTarget {
                                     Label("点击 Claude 输入框，再按 ⌃⌥E 连接", systemImage: "link")
                                         .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 4)
                                 }
                             }.padding(.vertical, 30).frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        ForEach(model.history) { item in ChatBubble(item: item, fontSize: model.replyTextSize.points).id(item.id) }
+                        ForEach(model.history) { item in
+                            ChatBubble(item: item, fontSize: model.replyTextSize.points) { model.copyTranslation(id: item.id) }.id(item.id)
+                        }
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(.leading, 18).padding(.trailing, 8).padding(.vertical, 12)
                 }.frame(minHeight: 180).scrollIndicators(.visible)
@@ -104,7 +105,7 @@ struct MainView: View {
             }
             Divider()
             VStack(alignment: .leading, spacing: 8) {
-                if !replies.status.isEmpty && (model.hasTarget || !model.history.isEmpty) {
+                if !replies.status.isEmpty && (model.hasTarget || replies.watching || !model.history.isEmpty) {
                     HStack(alignment: .top, spacing: 7) {
                         if replies.translating { ProgressView().controlSize(.small) }
                         else { Image(systemName: "text.bubble").foregroundStyle(.secondary) }
@@ -118,7 +119,7 @@ struct MainView: View {
                         }
                     }
                 }
-                if model.busy || model.isError || replies.status.isEmpty {
+                if model.showsOutgoingStatus {
                     HStack(alignment: .top, spacing: 7) {
                         if model.busy { ProgressView().controlSize(.small) }
                         else { Image(systemName: model.isError ? "exclamationmark.circle" : "info.circle") }
@@ -139,14 +140,17 @@ struct MainView: View {
                                 .padding(.horizontal, 12).padding(.vertical, 12).allowsHitTesting(false)
                         }
                     }.frame(height: min(160, max(76, CGFloat(model.input.split(separator: "\n", omittingEmptySubsequences: false).count) * 20 + 24)))
-                    Text("回车提交 · Shift + 回车换行").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text(model.isCLIConnection ? "回车翻译 · 复制译文后回终端按 ⌘V，再确认发送" : "回车提交 · Shift + 回车换行")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
                 }.padding(12)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
                     .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.10)))
                 HStack(spacing: 6) {
-                    Toggle("填入后发送", isOn: $model.autoSend).toggleStyle(.checkbox).disabled(model.busy)
-                        .font(.system(size: 11)).fixedSize()
-                    if model.autoSend {
+                    if !model.isCLIConnection {
+                        Toggle("填入后发送", isOn: $model.autoSend).toggleStyle(.checkbox).disabled(model.busy)
+                            .font(.system(size: 11)).fixedSize()
+                    }
+                    if model.autoSend && !model.isCLIConnection {
                         Picker("发送键", selection: $model.commandReturn) { Text("回车").tag(false); Text("⌘回车").tag(true) }
                             .labelsHidden().frame(width: 76).disabled(model.busy)
                     }
@@ -157,13 +161,19 @@ struct MainView: View {
                     } else {
                         Button("读取历史回复") { model.readVisibleReply() }.disabled(!model.hasTarget && model.bridge.selected.isEmpty)
                         Button("仅翻译") { model.begin(insert: false) }.disabled(model.input.count > InputPolicy.limit || model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        if !model.output.isEmpty { Button("填入译文") { model.insertResult() }.disabled(!model.hasTarget) }
+                        if !model.output.isEmpty && model.hasTarget { Button("填入译文") { model.insertResult() } }
                         Spacer(minLength: 0)
-                        Button { model.begin(insert: true) } label: {
-                            Label(model.autoSend ? "发送给 Claude" : "翻译并填入", systemImage: "paperplane.fill")
+                        if !model.output.isEmpty {
+                            Button("复制译文", systemImage: "doc.on.doc") { model.copyOutput() }
+                                .help(model.isCLIConnection ? "复制完整译文，回到 Claude Code 按 ⌘V 粘贴，再确认发送" : "复制完整译文")
                         }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(!model.hasTarget || model.input.count > InputPolicy.limit || model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        if !model.isCLIConnection {
+                            Button { model.begin(insert: true) } label: {
+                                Label(model.autoSend ? "发送给 Claude" : "翻译并填入", systemImage: "paperplane.fill")
+                            }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!model.hasTarget || model.input.count > InputPolicy.limit || model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
                     }
                 }.controlSize(.small)
             }.padding(.horizontal, 18).padding(.vertical, 12)
@@ -182,6 +192,7 @@ struct MainView: View {
             }
             .sheet(isPresented: $replies.showHistoryPicker) { VisibleReplyPicker(replies: replies) }
             .sheet(isPresented: $model.showSettings) { SettingsView(model: model) }
+            .sheet(isPresented: $model.showCLIPicker) { CLIConnectionPicker(model: model) }
             .sheet(isPresented: $usage.showConnection) { ClaudeUsageConnectionView(usage: usage, prepareBridge: {
                 if !model.bridge.enabled { model.bridge.start() }
                 return model.bridge.connectionPath
@@ -189,6 +200,51 @@ struct MainView: View {
             .onAppear { model.refreshHealth() }
             .onReceive(NotificationCenter.default.publisher(for: .achuReaderInteracted)) { _ in model.readingHistory = true }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.refreshHealth() }
+    }
+}
+
+struct CLIConnectionPicker: View {
+    @ObservedObject var model: TranslatorModel
+    @ObservedObject var bridge: BridgeCoordinator
+    @Environment(\.dismiss) private var dismiss
+    init(model: TranslatorModel) { self.model = model; self.bridge = model.bridge }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("选择 Claude Code 会话").font(.title2.bold())
+            Text("对照终端底部「A畜伴侣 CLI」的编号，选择你正在使用的会话。不同终端程序均使用这个编号；最近报告不代表当前前台会话。")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+            ScrollView {
+                VStack(spacing: 10) {
+                    if bridge.cliChoices.isEmpty {
+                        Text("尚未收到 CLI 报告。请保持已登录的 Claude Code 打开，再刷新报告；无需先发送消息。")
+                            .font(.system(size: 13)).foregroundStyle(.secondary).padding(.vertical, 20)
+                    }
+                    ForEach(bridge.cliChoices) { source in
+                        Button { bridge.select(source.id) } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text(source.name).font(.system(size: 13, weight: .semibold))
+                                    Spacer()
+                                    if source.id == bridge.selected { Text("正在读取").font(.system(size: 11)) }
+                                }
+                                Text(source.reportDescription + (source.source?.model.map { " · " + $0 } ?? ""))
+                                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                                Text(source.hasReplies ? "已接收正文" : "已收到报告，等待正式回复")
+                                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+                        }.buttonStyle(.plain).disabled(model.busy)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.scrollIndicators(.visible)
+            Text(model.status).font(.system(size: 11)).foregroundStyle(model.isError ? .orange : .secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("刷新报告") { model.connectCLI(releaseSelection: false) }.disabled(model.busy)
+                Spacer()
+                Button("取消") { dismiss() }
+            }
+        }.padding(24).frame(width: 500, height: 400)
     }
 }
 
@@ -222,13 +278,22 @@ struct VisibleReplyPicker: View {
 struct ChatBubble: View {
     let item: TranslatorModel.ChatItem
     let fontSize: CGFloat
+    let copyTranslation: () -> Bool
     @State private var expanded = false
+    @State private var copied = false
     var body: some View {
         HStack(alignment: .top) {
             if item.isUser { Spacer(minLength: 55) }
             VStack(alignment: .leading, spacing: 8) {
-                Label(item.isUser ? "你" : (item.chinese.isEmpty ? "Claude · 原文已读取" : "Claude · 中文译文"), systemImage: item.isUser ? "person.crop.circle" : "bubble.left")
-                    .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                HStack {
+                    Label(item.isUser ? "你" : (item.chinese.isEmpty ? "Claude · 原文已读取" : "Claude · 中文译文"), systemImage: item.isUser ? "person.crop.circle" : "bubble.left")
+                        .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                    Spacer(minLength: 6)
+                    if item.isUser && !item.foreign.isEmpty {
+                        Button(copied ? "已复制" : "复制译文", systemImage: "doc.on.doc") { copied = copyTranslation() }
+                            .controlSize(.mini).help("复制这条消息的完整外文译文")
+                    }
+                }
                 if item.updating && !item.chinese.isEmpty {
                     Text("阶段性中文 · 后续片段正在更新").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
@@ -237,7 +302,7 @@ struct ChatBubble: View {
                     Text("稳定片段将自动译成中文，无需等待整轮结束。").font(.system(size: 10)).foregroundStyle(.secondary)
                 } else { MessageText(text: item.chinese, fontSize: item.isUser ? 15 : fontSize) }
                 if !item.foreign.isEmpty && (item.isUser || !item.chinese.isEmpty) {
-                    DisclosureGroup(item.language.name + "原文", isExpanded: $expanded) {
+                    DisclosureGroup(item.language.name + (item.isUser ? "译文" : "原文"), isExpanded: $expanded) {
                         MessageText(text: item.foreign, original: true)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 5)
                     }.font(.system(size: 10))
@@ -246,6 +311,7 @@ struct ChatBubble: View {
                 .background(item.isUser ? Color.accentColor.opacity(0.07) : Color.clear, in: RoundedRectangle(cornerRadius: 16))
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(item.isUser ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.08)))
+                .onChange(of: item.foreign) { _, _ in copied = false }
         }
     }
 }

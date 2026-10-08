@@ -2,6 +2,7 @@
 """Read-only local bridge. Never opens Claude, reads OAuth, or stores chat text."""
 import argparse
 import hashlib
+import unicodedata
 import fcntl
 import json
 import os
@@ -55,7 +56,32 @@ def binding(value):
     session = value.get('session_id', '')
     if not isinstance(session, str) or not session:
         raise ValueError('Session required')
-    return 'cli-' + hashlib.sha256((session + '\0' + str(value.get('cwd', ''))).encode()).hexdigest()
+    return 'cli-' + hashlib.sha256(session.encode()).hexdigest()
+
+def source_summary(value):
+    def label(text):
+        if not isinstance(text, str):
+            return ''
+        return ''.join(char for char in text if not unicodedata.category(char).startswith('C') and
+                       unicodedata.category(char) not in ('Zl', 'Zp'))[:80].strip()
+    workspace = value.get('workspace')
+    workspace = workspace if isinstance(workspace, dict) else {}
+    cwd = workspace.get('current_dir') or value.get('cwd')
+    result = {}
+    if isinstance(cwd, str) and cwd:
+        name = label(Path(cwd).name).replace('\\', '')
+        if name:
+            result['workspace'] = name
+    model = value.get('model')
+    name = label(model.get('display_name')) if isinstance(model, dict) else ''
+    if name:
+        result['model'] = name
+    return result
+
+def status_label(value):
+    summary = source_summary(value)
+    workspace = summary.get('workspace')
+    return 'A畜伴侣 CLI · ' + binding(value)[-6:] + ((' · ' + workspace) if workspace else '')
 
 def hook_envelope(value):
     for key in ('message_id', 'turn_id', 'delta'):
@@ -66,7 +92,7 @@ def hook_envelope(value):
         raise ValueError('Invalid batch')
     return {'version':1, 'kind':'delta', 'binding':binding(value), 'epoch':value['session_id'],
             'sequence':index, 'messageID':value['message_id'], 'turnID':value['turn_id'],
-            'text':value['delta'], 'final':value['final']}
+            'text':value['delta'], 'final':value['final'], 'source':source_summary(value)}
 
 def status_envelope(value, context=None):
     global _capture_sequence
@@ -77,7 +103,7 @@ def status_envelope(value, context=None):
     selected = {k:{field:v for field,v in limits[k].items() if field in ('used_percentage','resets_at')}
                 for k in ('five_hour','seven_day') if isinstance(limits.get(k), dict)}
     return {'version':1, 'kind':'usage', 'binding':binding(value), 'epoch':value['session_id'],
-            'sequence':_capture_sequence, 'usage':{'rate_limits':selected}, **(context or {})}
+            'sequence':_capture_sequence, 'usage':{'rate_limits':selected}, 'source':source_summary(value), **(context or {})}
 
 def official_cli_identity():
     """Official metadata only. Never read an OAuth/keychain item or relay raw stdout."""
@@ -118,6 +144,35 @@ class CLIAccountTracker:
         if metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
             raise ValueError('Private account state required')
 
+    def _read_private(self, path):
+        if path.is_symlink() or path.stat().st_uid != os.getuid() or path.stat().st_mode & 0o077:
+            raise ValueError('Private state required')
+        state = json.loads(path.read_text())
+        if not isinstance(state, dict):
+            raise ValueError('Private state required')
+        return state
+
+    def _legacy_state(self, value):
+        workspace = value.get('workspace')
+        workspace = workspace if isinstance(workspace, dict) else {}
+        directories = {item for item in (value.get('cwd'), workspace.get('project_dir')) if isinstance(item, str)}
+        states = []
+        for cwd in directories:
+            if not isinstance(cwd, str):
+                continue
+            stem = 'cli-' + hashlib.sha256((value['session_id'] + '\0' + cwd).encode()).hexdigest()
+            path = self.directory/(stem + '.json')
+            if path.exists() or path.is_symlink():
+                states.append(self._read_private(path))
+        if not states:
+            return None
+        state = max(states, key=lambda item: item['sequence']).copy()
+        # A migration may never restore an invalidated identity or choose one
+        # account when exact old records disagree. Old files remain intact.
+        if any(item.get('invalidated') or item.get('identity') != state.get('identity') for item in states):
+            state['invalidated'] = True
+        return state
+
     def _locked(self, value, change):
         stem = binding(value)
         path = self.directory/(stem + '.json')
@@ -131,10 +186,10 @@ class CLIAccountTracker:
                 raise ValueError('Private lock required')
             fcntl.flock(fd, fcntl.LOCK_EX)
             state = None
-            if path.exists():
-                if path.is_symlink() or path.stat().st_uid != os.getuid() or path.stat().st_mode & 0o077:
-                    raise ValueError('Private state required')
-                state = json.loads(path.read_text())
+            if path.exists() or path.is_symlink():
+                state = self._read_private(path)
+            else:
+                state = self._legacy_state(value)
             result, state = change(state)
             atomic(path, state)
             return result
@@ -394,14 +449,13 @@ def main():
             send(args.connection, status_envelope(value, context))
         except (ValueError, OSError, KeyError):
             pass
+        print(status_label(value), flush=True)
         original = json.loads(args.original_status)
         if isinstance(original, dict) and isinstance(original.get('command'), str):
             try:
                 subprocess.run(original['command'], shell=True, input=data, timeout=1, check=False)
             except subprocess.TimeoutExpired:
                 pass
-        else:
-            print('')
 
 if __name__ == '__main__':
     try:

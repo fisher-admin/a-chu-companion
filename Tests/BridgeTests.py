@@ -4,6 +4,10 @@ import json
 import struct
 import tempfile
 import unittest
+import hashlib
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +20,67 @@ class TinyReads(io.BytesIO):
         return super().read(min(size, 1) if size > 0 else size)
 
 class BridgeTests(unittest.TestCase):
+    def test_binding_tracks_session_not_terminal_or_working_directory(self):
+        first = {'session_id':'one-session', 'cwd':'/synthetic/project', 'terminal':'Carrier A'}
+        moved = dict(first, cwd='/synthetic/project/subdirectory', terminal='Carrier B')
+        self.assertEqual(bridge.binding(first), bridge.binding(moved), 'one session must not become extra choices when cwd changes')
+        self.assertNotEqual(bridge.binding(first), bridge.binding(dict(first, session_id='second-session')))
+
+    def test_source_summary_excludes_full_paths_and_arbitrary_metadata(self):
+        payload = {'session_id':'summary', 'cwd':'/private/synthetic/project', 'workspace':{'current_dir':'/private/synthetic/project'},
+                   'model':{'display_name':'Opus'}, 'transcript_path':'private-transcript', 'unrelated':'do-not-relay', 'rate_limits':{}}
+        result = bridge.status_envelope(payload)
+        self.assertEqual(result.get('source'), {'workspace':'project','model':'Opus'})
+        self.assertNotIn('/private/synthetic', json.dumps(result)); self.assertNotIn('private-transcript', json.dumps(result))
+        self.assertNotIn('do-not-relay', json.dumps(result))
+
+    def test_source_summary_sanitizes_terminal_controls_and_bounds_names(self):
+        value = bridge.status_envelope({'session_id':'clean','cwd':'/private/\x1b[31mProject\nName', 'model':{'display_name':'\x1b[2J'+'m'*200},'rate_limits':{}})
+        source = value.get('source', {})
+        self.assertTrue(source.get('workspace'), 'safe source labels are needed')
+        self.assertNotIn('\x1b', str(source)); self.assertNotIn('\n', str(source))
+        self.assertLessEqual(len(source.get('workspace','')),80); self.assertLessEqual(len(source.get('model','')),80)
+        self.assertEqual(bridge.source_summary({'cwd':'/synthetic/project\\name'})['workspace'], 'projectname')
+
+    def legacy_state(self, directory, session, cwd, identity, invalidated=False, sequence=10):
+        stem = 'cli-' + hashlib.sha256((session+'\0'+cwd).encode()).hexdigest()
+        path=Path(directory)/(stem+'.json')
+        path.write_text(json.dumps({'epoch':'legacy-epoch','sequence':sequence,'identity':identity,'invalidated':invalidated}))
+        os.chmod(path,0o600)
+
+    def test_exact_legacy_account_state_migrates_across_directory_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            login={'loggedIn':True,'authMethod':'claude.ai','apiProvider':'firstParty','email':'first@example.test'}
+            tracker=bridge.CLIAccountTracker(Path(directory)/'state',lambda:login)
+            identity=bridge.account_identity(login)
+            self.legacy_state(tracker.directory,'existing','/synthetic/project',identity)
+            value={'session_id':'existing','cwd':'/synthetic/project/subdir','workspace':{'project_dir':'/synthetic/project'}}
+            self.assertEqual(tracker.report(value).get('account'),identity,'upgrade must use only the exactly matched original session state')
+            self.assertEqual(tracker.report(dict(value,cwd='/elsewhere')).get('account'),identity)
+            self.assertNotIn('account',tracker.report(dict(value,session_id='unrelated')))
+
+    def test_legacy_invalidated_and_conflicting_accounts_remain_quarantined(self):
+        with tempfile.TemporaryDirectory() as directory:
+            login={'loggedIn':True,'authMethod':'claude.ai','apiProvider':'firstParty','email':'first@example.test'}
+            tracker=bridge.CLIAccountTracker(Path(directory)/'state',lambda:login); identity=bridge.account_identity(login)
+            self.legacy_state(tracker.directory,'invalid','/synthetic/project',identity,True)
+            value={'session_id':'invalid','cwd':'/synthetic/project/subdir','workspace':{'project_dir':'/synthetic/project'}}
+            self.assertNotIn('account',tracker.report(value))
+            second=bridge.account_identity(dict(login,email='second@example.test'))
+            self.legacy_state(tracker.directory,'conflict','/synthetic/project',identity)
+            self.legacy_state(tracker.directory,'conflict','/synthetic/project/subdir',second)
+            self.assertNotIn('account',tracker.report(dict(value,session_id='conflict')))
+
+    def test_statusline_exposes_matching_identifier_and_preserves_user_output(self):
+        payload={'session_id':'visible','cwd':'/private/synthetic/project','model':{'display_name':'Opus'},'rate_limits':{}}
+        with tempfile.TemporaryDirectory() as directory:
+            command=[sys.executable,str(ROOT/'Bridge/bridge.py'),'--statusline','--connection',str(Path(directory)/'missing.json'),
+                     '--original-status',json.dumps({'type':'command','command':'printf USER-STATUS'})]
+            result=subprocess.run(command,input=json.dumps(payload),capture_output=True,text=True,check=True)
+            self.assertIn('USER-STATUS',result.stdout)
+            self.assertIn(bridge.binding(payload)[-6:],result.stdout,'terminal and companion need the same recognizable session identifier')
+            self.assertIn('project',result.stdout); self.assertNotIn('/private/synthetic',result.stdout)
+
     def test_native_fragmented_unicode_and_eof(self):
         value = {'text': '中文😀'}
         data = json.dumps(value, ensure_ascii=False).encode()

@@ -10,6 +10,7 @@ import ApplicationServices
     @MainActor static func main() async throws {
         setvbuf(stdout, nil, _IONBF, 0); _ = NSApplication.shared
         let model = TranslatorModel(permissionCheck: { true }, remoteKeyRead: { _ in "synthetic-value" })
+        model.cliEntryRequest = { _ in }
         defer { model.bridge.stop(); model.cancel(); model.stopPermissionMonitoring() }
         model.input = "保留草稿"; model.history = [.init(id: "retained", isUser: false, chinese: "保留译文", foreign: "Retained.")]
         model.bridge.start()
@@ -20,6 +21,7 @@ import ApplicationServices
             try process.run(); process.waitUntilExit(); return process.terminationStatus
         }.value
         check(result == 0 && model.bridge.choices.count == 2, "authenticated synthetic reports create two separate CLI choices")
+        check(Set(model.bridge.cliChoices.compactMap { $0.source?.workspace }) == ["Synthetic One", "Synthetic Two"] && model.bridge.cliChoices.allSatisfy { $0.reportedAt != nil && !$0.hasReplies }, "discovered sessions include distinct directory labels, local report times and honest waiting states")
         var quotaBindings: [String] = []
         model.bridge.onUsageConnection = { quotaBindings.append($0 ?? "none") }
         model.bridge.select("cli-routing-one")
@@ -34,6 +36,7 @@ import ApplicationServices
         check(model.input == "保留草稿" && model.history.first?.id == "retained", "connection routing preserves the draft and acquired translations")
         check(model.status.contains("CLI") && !model.status.contains("读取已停止"), "an unverified composer receives CLI connection guidance instead of a false stopped reader")
         check(model.bridge.selected.isEmpty, "multiple reported CLI sessions are never selected automatically")
+        check(model.showCLIPicker, "an unverified captured composer opens an actionable CLI session picker")
         check(TargetBridge.nativeReplySupported(bundle: "com.anthropic.claudefordesktop", conversation: nil), "the official Desktop identity retains its native route")
         check(TargetBridge.nativeReplySupported(bundle: "unlisted.browser", conversation: "https://claude.ai/chat/synthetic"), "a verified Claude web composer is independent of browser brand")
         check(!TargetBridge.nativeReplySupported(bundle: "unlisted.terminal", conversation: nil), "a terminal carrier alone does not prove a Claude native composer")
@@ -60,6 +63,29 @@ import ApplicationServices
         pending?.resume(throwing: BridgeError.message("Synthetic late connection failure")); pending = nil
         try await Task.sleep(for: .milliseconds(20))
         check(model.status == selectedStatus && model.replies.watching && model.bridge.selected == "cli-routing-two", "a late connection failure cannot overwrite the selected current source")
+        model.handleCaptureFailure(BridgeError.message("Synthetic non-editable terminal surface"), bundle: "another.carrier")
+        check(model.showCLIPicker && !model.hasTarget && model.bridge.choices.count == 2, "a non-editable terminal surface opens the same picker without an app-name whitelist")
+        model.showCLIPicker = false
+        model.handleCaptureFailure(BridgeError.message("Synthetic Desktop focus failure"), bundle: "com.anthropic.claudefordesktop")
+        check(!model.showCLIPicker && model.status.contains("Desktop focus failure"), "a known Desktop focus failure does not masquerade as a CLI connection")
+        model.bridge.select("cli-routing-one")
+        let board = NSPasteboard(name: .init("achu-routing-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        model.engine = "gemini"; model.language = .english; model.testTranslation = { _ in "Hello." }
+        model.input = "你好"; model.begin(insert: false)
+        while model.busy { try await Task.sleep(for: .milliseconds(2)) }
+        check(model.isCLIConnection && !model.hasTarget && model.output == "Hello.", "a selected CLI session translates Chinese without turning into a terminal sending target")
+        check(model.showsOutgoingStatus, "a completed outgoing translation remains visible alongside read-only monitoring status")
+        check(model.copyOutput(to: board) && board.string(forType: .string) == "Hello.", "the complete outgoing translation is copied into an actual private pasteboard")
+        let rowID = model.history.last!.id
+        model.input = "新的草稿"
+        check(model.output.isEmpty && !model.copyOutput(to: board), "editing the draft disables copying a stale current result")
+        check(model.copyTranslation(id: rowID, to: board) && board.string(forType: .string) == "Hello.", "the explicit history copy survives draft changes")
+        model.history.removeAll()
+        check(!model.copyTranslation(id: rowID, to: board), "a removed history item cannot be copied through a stale action")
+        model.output = "Synthetic pending output"; model.busy = true
+        check(!model.copyOutput(to: board) && board.string(forType: .string) == "Hello.", "an unfinished job cannot replace the clipboard with pending output")
+        model.busy = false; model.output = ""
         print("\(count) connection routing checks; \(failures) failed")
         if failures > 0 { exit(1) }
     }

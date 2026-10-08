@@ -93,6 +93,22 @@ import Foundation
         quota["sequence"] = 4; quota["account"] = ["fingerprint": String(repeating: "b", count: 64), "displayName": "B", "email": "synthetic@example.test"]
         do { _ = try quotas.accept(frame(quota), token: "synthetic-token"); fatalError("raw identity fields are forbidden") } catch {}
         print("PASS: current account identity is explicit, empty usage invalidates identity and raw account fields are rejected")
-        print("11 bridge protocol contracts passed")
+        var labeled = emptyUsage
+        labeled["binding"] = "cli-labeled"; labeled["source"] = ["workspace":"Synthetic project","model":"Opus"]
+        let labelAccepted: Bool
+        do { _ = try decoder.accept(frame(labeled),token:"synthetic-token"); labelAccepted = true }
+        catch { labelAccepted = false }
+        precondition(labelAccepted, "a bounded CLI source summary must not discard a valid usage report")
+        print("PASS: valid CLI source labels accompany usage without changing reply content")
+        labeled["sequence"] = 1; labeled["source"] = ["workspace":"/private/project"]
+        do { _ = try decoder.accept(frame(labeled),token:"synthetic-token"); fatalError("full source path") } catch {}
+        labeled["source"] = ["workspace":"project","accountEmail":"private@example.test"]
+        do { _ = try decoder.accept(frame(labeled),token:"synthetic-token"); fatalError("raw source account") } catch {}
+        labeled["source"] = ["workspace":"project\nother"]
+        do { _ = try decoder.accept(frame(labeled),token:"synthetic-token"); fatalError("source control") } catch {}
+        labeled["source"] = ["workspace":"project"]; labeled["sequence"] = 1
+        _ = try decoder.accept(frame(labeled),token:"synthetic-token")
+        print("PASS: invalid source paths, extra fields and controls do not poison the following valid report")
+        print("13 bridge protocol contracts passed")
     }
 }

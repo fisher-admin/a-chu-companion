@@ -4,6 +4,13 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-07 — build 68 — installed / CLI会话辨认与复制修复
+
+- Open an actionable CLI session picker from unverified/non-editable capture. Show bounded directory/model labels and local report times; match the terminal footer identifier explicitly without guessing a session or terminal brand. / 无法识别或捕获终端输入时打开可操作的会话选择页；显示目录末级名、模型、报告时间，按终端底部编号明确选择，不按终端品牌或最近来源猜选。
+- Bind one session independently of cwd; migrate only exact old account states while preserving invalidated/conflicting identity isolation and original files. Retain existing status-line output. / 同一会话切目录不再生成额外连接；只迁移精确旧状态，保留失效／冲突身份隔离、原文件和用户状态栏。
+- Add current/history outgoing translation copy actions, keep completed/fallback status visible, and hide invalid automatic-send controls for CLI. Paste and confirm in the terminal manually. / 新增当前和历史外文复制按钮，翻译完成与兜底提示不被等待读取遮盖；CLI隐藏无效自动发送控制，复制后回终端粘贴并确认发送。
+- Preserve build67 as `d9b8b90` with an installed backup. All 33 groups / 621 declared checks, HTTP19, socket4, Python19 and Node13 passed; source/script/resource consistency and the original signing requirement verified. Synthetic and installed-editor clipboard tests passed. Noninteractive Gemini key access was unavailable; the installed fixed-sentence check used system fallback. Physical terminal verification and full live acceptance remain separate. / 保留build67提交及应用备份；完整33组621项、HTTP19、socket4、Python19及Node13通过，冻结源码／脚本／资源及原签名已核对。模拟窗口与正式伴侣编辑器复制通过；Gemini无弹窗密钥读取受限，固定句由系统兜底。实体终端及完整真实验收另列，见[修复记录](docs/testing/cli-workflow-repair-2026-10-07.md)。
+
 ## 1.1.8 — 2026-10-07 — build 67 — installed / CLI连接分流修复
 
 - Route verified Desktop/Web composers separately from read-only CLI sessions. An unverified terminal composer no longer closes discovery or enters native reply reading; release old usage without guessing a replacement. / 已核实的桌面和网页保留原生读取；终端输入不再关闭只读入口或误入原生读取，旧额度解除，不猜测当前会话。

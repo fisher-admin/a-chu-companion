@@ -1,8 +1,14 @@
 import Foundation
 import CoreFoundation
 
+struct BridgeSourceDetails: Equatable {
+    let workspace: String?
+    let model: String?
+}
+
 struct BridgeUpdate {
     let binding: String
+    var source: BridgeSourceDetails? = nil
     var snapshot: ReplySnapshot? = nil
     var evidence: UsageEvidence? = nil
     var accountObservation: UsageAccountObservation? = nil
@@ -50,7 +56,7 @@ struct BridgeDecoder {
         streams[binding] = stream
     }
     mutating func accept(_ data: Data, token: String) throws -> BridgeUpdate {
-        let allowed: Set<String> = ["version","token","kind","binding","epoch","sequence","messageID","turnID","text","final","url","messages","usage","account"]
+        let allowed: Set<String> = ["version","token","kind","binding","epoch","sequence","messageID","turnID","text","final","url","messages","usage","account","source"]
         guard data.count <= 8 * 1024 * 1024,
               let body = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(body.keys).isSubset(of: allowed), integer(body["version"]) == 1,
@@ -60,6 +66,19 @@ struct BridgeDecoder {
               binding.range(of: "^(web|cli)-[A-Za-z0-9_-]+$", options: .regularExpression) != nil,
               let epoch = body["epoch"] as? String, !epoch.isEmpty, epoch.count <= 128,
               let sequence = integer(body["sequence"]), sequence >= 0 else { throw BridgeError.message("桥接报文或权限无效，未采用。") }
+        var source: BridgeSourceDetails?
+        if let raw = body["source"] {
+            guard binding.hasPrefix("cli-"), let value = raw as? [String: Any], Set(value.keys).isSubset(of: ["workspace","model"]) else {
+                throw BridgeError.message("CLI 来源摘要无效。")
+            }
+            let controls = CharacterSet.controlCharacters.union(.init(charactersIn: "\u{2028}\u{2029}"))
+            for (key, rawLabel) in value {
+                guard let label = rawLabel as? String, !label.isEmpty, label.count <= 80,
+                      !label.unicodeScalars.contains(where: controls.contains),
+                      key != "workspace" || (!label.contains("/") && !label.contains("\\")) else { throw BridgeError.message("CLI 来源摘要无效。") }
+            }
+            source = .init(workspace: value["workspace"] as? String, model: value["model"] as? String)
+        }
         if streams[binding] == nil && streams.count >= 8 { throw BridgeError.message("桥接来源过多，请停止旧连接后再连接。") }
         if binding.hasPrefix("web-") {
             guard let rawURL = body["url"] as? String, let url = URLComponents(string: rawURL),
@@ -89,10 +108,10 @@ struct BridgeDecoder {
                 }
             } else if usageStreams.count >= 8 { throw ClaudeUsageError.malformed }
             usageStreams[binding] = .init(epoch: epoch, sequence: sequence)
-            let source: UsageEvidenceSource = binding.hasPrefix("web-") ? .usagePage : .statusLine
-            let observation = UsageAccountObservation(source: source, binding: binding, epoch: epoch, sequence: sequence, identity: identity)
-            let evidence = parsed.map { UsageEvidence(source: source, binding: binding, snapshot: $0.snapshot, identity: identity, epoch: epoch, sequence: sequence, pageURL: body["url"] as? String) }
-            return .init(binding: binding, evidence: evidence, accountObservation: evidence == nil ? observation : nil)
+            let evidenceSource: UsageEvidenceSource = binding.hasPrefix("web-") ? .usagePage : .statusLine
+            let observation = UsageAccountObservation(source: evidenceSource, binding: binding, epoch: epoch, sequence: sequence, identity: identity)
+            let evidence = parsed.map { UsageEvidence(source: evidenceSource, binding: binding, snapshot: $0.snapshot, identity: identity, epoch: epoch, sequence: sequence, pageURL: body["url"] as? String) }
+            return .init(binding: binding, source: source, evidence: evidence, accountObservation: evidence == nil ? observation : nil)
         }
         let conversation = "bridge:" + binding + ":" + epoch
         var stream = streams[binding].flatMap { $0.epoch == epoch ? $0 : nil } ?? Stream(epoch: epoch)
@@ -164,6 +183,6 @@ struct BridgeDecoder {
         stream.messages = Array(stream.messages.suffix(16))
         try commit(stream, binding: binding)
         // MessageDisplay final terminates one message, not the whole turn.
-        return .init(binding: binding, snapshot: .init(conversation: conversation, messages: stream.messages, foundTranscript: true, responseComplete: false))
+        return .init(binding: binding, source: source, snapshot: .init(conversation: conversation, messages: stream.messages, foundTranscript: true, responseComplete: false))
     }
 }

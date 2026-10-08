@@ -161,6 +161,9 @@ final class TranslatorModel: ObservableObject {
     @Published private(set) var permission: Bool
     @Published var configuration: TranslationSession.Configuration?
     @Published var showSettings = false
+    @Published var showCLIPicker = false
+    var isCLIConnection: Bool { bridge.enabled && bridge.selected.hasPrefix("cli-") }
+    var showsOutgoingStatus: Bool { busy || isError || replies.status.isEmpty || !output.isEmpty }
     @Published var engine = CompanionPreferences.store.string(forKey: "engine") ?? "apple"
     @Published var baseURL = CompanionPreferences.store.string(forKey: "baseURL") ?? ""
     @Published var aiModel = CompanionPreferences.store.string(forKey: "aiModel") ?? ""
@@ -240,15 +243,16 @@ final class TranslatorModel: ObservableObject {
             guard let self else { return }
             retireConnectionRequest(); replies.stop(); target = nil; hasTarget = false
             if !bridge.selected.isEmpty {
+                showCLIPicker = false
                 replies.watching = true
-                replies.sourceName = BridgeChoice(id: bridge.selected).name
+                replies.sourceName = bridge.selectedName
                 replies.status = "已选择只读会话，等待正式回复；输入可翻译和复制。"
                 targetName = replies.sourceName; report(replies.status)
             }
         }
         bridge.onSnapshot = { [weak self] snapshot in
             guard let self else { return }
-            target = nil; hasTarget = false; targetName = BridgeChoice(id: bridge.selected).name
+            target = nil; hasTarget = false; targetName = bridge.selectedName
             replies.watching = true; replies.sourceName = targetName
             replies.configure(engine: engine, baseURL: baseURL, model: activeAIModel, language: language)
             replies.ingest(snapshot)
@@ -269,18 +273,21 @@ final class TranslatorModel: ObservableObject {
         do {
             connectCapturedTarget(try TargetBridge.capture())
         } catch {
-            target = nil; hasTarget = false; targetName = "未选择输入框"
-            status = error.localizedDescription; isError = false
+            handleCaptureFailure(error, bundle: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
         }
+    }
+    func handleCaptureFailure(_ error: Error, bundle: String?) {
+        guard bundle == "com.anthropic.claudefordesktop" || busy else { connectCLI(); return }
+        retireConnectionRequest(); target = nil; hasTarget = false; targetName = "未选择输入框"
+        if bridge.enabled { bridge.clearSelection() } else { replies.stop() }
+        showCLIPicker = false
+        report(error.localizedDescription, error: true)
     }
     func connectCapturedTarget(_ captured: TargetBridge.Target) {
         retireConnectionRequest()
         guard TargetBridge.nativeReplySupported(bundle: captured.app.bundleIdentifier, conversation: captured.conversation) else {
-            target = nil; hasTarget = false; targetName = "未选择 Claude 来源"
-            if bridge.enabled { bridge.clearSelection() } else { replies.stop() }
-            replies.status = ""
             onNonClaudeConnection(captured.name)
-            report("当前输入框尚未确认 Claude 来源。Claude Code 终端请点击「连接 CLI」，再选择正在使用的会话；不会向终端模拟回车。")
+            connectCLI()
             return
         }
         target = captured; targetName = captured.name; hasTarget = true
@@ -290,20 +297,22 @@ final class TranslatorModel: ObservableObject {
     private func retireConnectionRequest() {
         connectionRequestID = nil; connectionTask?.cancel(); connectionTask = nil
     }
-    func connectCLI() {
+    func connectCLI(releaseSelection: Bool = true) {
         guard !busy else { return }
         retireConnectionRequest(); target = nil; hasTarget = false
         if !bridge.enabled { bridge.start() }
         guard bridge.enabled else { report(bridge.status, error: true); return }
-        bridge.clearSelection(); replies.status = ""
+        if releaseSelection { bridge.clearSelection(); replies.status = "" }
+        showCLIPicker = true
         report("正在获取 Claude Code CLI 会话，请保持已登录的终端打开…")
         let id = UUID(), path = bridge.connectionPath
         connectionRequestID = id
         connectionTask = Task {
             do {
+                try Task.checkCancellation()
                 try await cliEntryRequest(path)
                 guard connectionRequestID == id, bridge.enabled, !Task.isCancelled else { return }
-                report("CLI 入口已准备。请在「连接 CLI」菜单选择当前会话；没有候选时，需在 Claude Code 完成一次正常回复。")
+                report("CLI 入口已准备。请选择与终端底部编号相同的会话；没有候选时，请保持已登录的 Claude Code 打开并刷新报告。")
             } catch {
                 guard connectionRequestID == id, !Task.isCancelled else { return }
                 report(error.localizedDescription, error: true)
@@ -539,10 +548,18 @@ final class TranslatorModel: ObservableObject {
             onNonClaudeConnection(target.name)
         }
     }
-    func copyOutput() {
-        guard !output.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(output, forType: .string)
-        report("译文已复制。")
+    @discardableResult func copyOutput(to board: NSPasteboard = .general) -> Bool {
+        guard !busy, !output.isEmpty else { return false }
+        return copyTranslationText(output, to: board)
+    }
+    @discardableResult func copyTranslation(id: String, to board: NSPasteboard = .general) -> Bool {
+        guard let item = history.first(where: { $0.id == id && $0.isUser }), !item.foreign.isEmpty else { return false }
+        return copyTranslationText(item.foreign, to: board)
+    }
+    private func copyTranslationText(_ text: String, to board: NSPasteboard) -> Bool {
+        board.clearContents()
+        guard board.setString(text, forType: .string) else { report("复制失败，译文已保留。", error: true); return false }
+        report(isCLIConnection ? "译文已复制；回到 Claude Code 按 ⌘V 粘贴，再确认发送。" : "译文已复制。")
+        return true
     }
 }
