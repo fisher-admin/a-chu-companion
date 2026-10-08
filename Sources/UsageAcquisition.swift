@@ -2,6 +2,28 @@ import AppKit
 import Foundation
 
 enum UsageAcquisition {
+    static func webSetupError(bundle: String?, supportDirectory: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")) -> String? {
+        let folders: [String]
+        switch bundle {
+        case "com.google.Chrome": folders = ["Google/Chrome"]
+        case "com.microsoft.edgemac": folders = ["Microsoft Edge"]
+        case nil: folders = ["Google/Chrome", "Microsoft Edge"]
+        default: return "当前浏览器尚未提供网页额度入口；回复读取与发送可以继续。现有额度入口支持 Chrome 和 Edge。"
+        }
+        for folder in folders {
+            let manifest = supportDirectory.appendingPathComponent(folder + "/NativeMessagingHosts/local.achu.companion.json")
+            guard FileManager.default.fileExists(atPath: manifest.path) else { continue }
+            guard let data = try? Data(contentsOf: manifest), let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  value["name"] as? String == "local.achu.companion", value["type"] as? String == "stdio",
+                  let path = value["path"] as? String, path.hasPrefix("/"), FileManager.default.fileExists(atPath: path),
+                  let origins = value["allowed_origins"] as? [String], origins.count == 1,
+                  origins[0].range(of: "^chrome-extension://[a-p]{32}/$", options: .regularExpression) != nil else {
+                return "网页额度入口配置已失效，请在「连接额度 → 网页端」重新连接网页入口；回复读取与发送可以继续。"
+            }
+            return nil
+        }
+        return "网页额度入口未配置，请在「连接额度 → 网页端」配置并启用网页入口；回复读取与发送可以继续。"
+    }
     static var cliDirectory: URL {
         let override = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
         return override.map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")

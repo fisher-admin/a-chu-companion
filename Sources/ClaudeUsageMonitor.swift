@@ -186,15 +186,20 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         acquisitionChannel = channel; acquisitionBinding = binding; acquisitionURL = pageURL
         acquisitionBaseline = accountStates.mapValues { $0.sequence }; acquiring = true
         acquisitionStatus = channel == .cli ? "正在请求 CLI 当前报告（服务器更新时间未知）…" : "正在请求网页当前账户额度…"
-        let requestReport = self.requestReport
+        let requestReport = self.requestReport, token = generation
         acquisitionTask = Task { [weak self] in
             do {
                 try await requestReport(channel, binding, pageURL)
                 try await Task.sleep(for: .seconds(12))
-                guard !Task.isCancelled, let self else { return }
+                guard !Task.isCancelled, let self, self.generation == token else { return }
                 acquisitionStatus = channel == .cli ? "未收到新额度报告。请启动新 Claude Code 会话；首次正式回复前可能没有额度字段。" : "未收到网页额度。请确认网页入口已安装并启用，当前账户可核对，且只有一个组织。"
+                if channel == .web, self.channel == .web { status = acquisitionStatus }
             } catch is CancellationError { return }
-            catch { self?.acquisitionStatus = error.localizedDescription }
+            catch {
+                guard !Task.isCancelled, let self, self.generation == token else { return }
+                acquisitionStatus = error.localizedDescription
+                if channel == .web, self.channel == .web { status = acquisitionStatus }
+            }
             self?.acquiring = false
         }
     }

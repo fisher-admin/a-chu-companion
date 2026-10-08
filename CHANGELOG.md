@@ -4,6 +4,13 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-08 — build 75 — 中文界面回复读取与网页额度诊断
+
+- Recognize English, Traditional Chinese and Simplified Chinese transcript, authorship, ordinal and completion metadata while preserving reply text. / 识别英文、繁体和简体中文的消息区、作者、序号及完成标记，保留回复原文。
+- Exclude localized message-action reveal buttons from tool activity and remove repeated tool prefixes only beside their matching cards. / 中文消息操作按钮不再误判为工具事件；仅在对应工具卡片旁去掉重复的工具提示前缀。
+- Diagnose missing or invalid Web native-host setup for the connected browser and publish acquisition failures in the main quota display. Do not substitute Desktop credentials. / 按所连浏览器检查网页额度入口配置，缺失、失效或获取失败显示具体原因，不以桌面登录代替网页账户。
+- Retain the shared manual input sender and removed translation review. All 38 offline suites passed. Preserve build74 `1bdd1b0` and earlier history; see the [build75 record](docs/testing/localized-reader-web-usage-2026-10-08.md). / 保持三端手选发送及取消质量审核，38组离线回归通过；保留build74及历次记录。
+
 ## 1.1.8 — 2026-10-08 — build 74 — 手选输入位置、三端统一发送
 
 - Pin the input chosen by the user's shortcut immediately and share one sending implementation across Desktop, Web and CLI. Read-source/usage reports cannot clear or redirect the sending target. / 快捷键立即保存手选输入位置，桌面、网页、CLI共用发送实现；回复或额度报告不清除、不改投发送目标。

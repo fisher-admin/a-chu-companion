@@ -39,6 +39,49 @@ struct ReplyReadPending: LocalizedError, Sendable {
 
 enum ClaudeTranscriptFormat: Sendable { case chat, code }
 
+/// Accessibility labels follow Claude's interface locale, independently of
+/// the language used in the actual reply. Canonicalize metadata only.
+enum ClaudeInterfaceLabel {
+    private static let exact: [String: String] = [
+            "對話訊息": "Chat messages", "对话消息": "Chat messages", "聊天消息": "Chat messages",
+            "側邊欄": "Sidebar", "侧边栏": "Sidebar", "通知": "Notifications",
+            "訊息操作": "Message actions", "消息操作": "Message actions",
+            "複製": "Copy", "复制": "Copy", "複製程式碼": "Copy code", "复制代码": "Copy code",
+            "重試": "Retry", "重试": "Retry", "良好回應": "Good response", "良好回应": "Good response",
+            "從此處分支": "Fork from here", "从此处分支": "Fork from here",
+            "停止回應": "Stop response", "停止回应": "Stop response", "停止生成": "Stop generating", "停止": "Stop",
+            "正在串流訊息": "Currently streaming message", "目前正在串流訊息": "Currently streaming message", "正在流式传输消息": "Currently streaming message",
+            "Claude 正在回應": "Claude is responding", "Claude 正在回应": "Claude is responding",
+            "Claude 正在思考": "Claude is thinking", "Claude 正在工作": "Claude is working",
+            "Claude 已完成回應": "Claude finished the response", "Claude 已完成回复": "Claude finished the response"
+    ]
+    private static let chatPositions = [#"^第\s*([0-9]+)\s*則訊息[，,]\s*共\s*([0-9]+)\s*則$"#,
+                                        #"^第\s*([0-9]+)\s*条消息[，,]\s*共\s*([0-9]+)\s*条$"#].compactMap { try? NSRegularExpression(pattern: $0) }
+    static func canonical(_ label: String) -> String {
+        if let value = exact[label] { return value }
+        for (prefix, replacement) in [
+            ("Claude 已回覆：", "Claude responded:"), ("Claude 已回覆:", "Claude responded:"),
+            ("Claude 已回复：", "Claude responded:"), ("Claude 已回复:", "Claude responded:"),
+            ("Claude 回复：", "Claude responded:"), ("Claude 回复:", "Claude responded:"),
+            ("您說：", "You said:"), ("您說:", "You said:"), ("你说：", "You said:"), ("你说:", "You said:")
+        ] where label.hasPrefix(prefix) {
+            return replacement + label.dropFirst(prefix.count)
+        }
+        if (label.hasPrefix("顯示「") && label.hasSuffix("」的訊息操作")) ||
+           (label.hasPrefix("显示") && label.hasSuffix("的消息操作")) { return "Show message actions" }
+        for regex in chatPositions where label.hasPrefix("第") {
+            if let match = regex.firstMatch(in: label, range: NSRange(label.startIndex..., in: label)),
+               let ordinal = Range(match.range(at: 1), in: label), let total = Range(match.range(at: 2), in: label) {
+                return "Message \(label[ordinal]) of \(label[total])"
+            }
+        }
+        for prefix in ["訊息 ", "消息 "] where label.hasPrefix(prefix) {
+            return "Message " + label.dropFirst(prefix.count)
+        }
+        return label
+    }
+}
+
 enum ClaudeConversationPage {
     static func format(_ address: String) -> ClaudeTranscriptFormat? {
         guard let url = URL(string: address), url.scheme == "https", url.host == "claude.ai" else { return nil }
@@ -159,14 +202,14 @@ enum ClaudeDecoder {
         }
     }
     static func responseComplete(statusLabels: [String], controlLabels: [String], latest: ReplyNode?, format: ClaudeTranscriptFormat = .chat) -> Bool {
-        let controls = controlLabels.map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+        let controls = controlLabels.map { ClaudeInterfaceLabel.canonical($0).lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
         if controls.contains(where: { ["stop response", "stop generating", "stop"].contains($0) }) { return false }
-        let statuses = statusLabels.map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+        let statuses = statusLabels.map { ClaudeInterfaceLabel.canonical($0).lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
         if statuses.contains(where: { ["claude is responding", "claude is thinking", "claude is working"].contains($0) }) { return false }
         if statuses.contains("claude finished the response") { return true }
         func hasFinalActions(_ node: ReplyNode) -> Bool {
-            if node.role == "AXToolbar", node.label == "Message actions" {
-                let names = node.children.map(\.label)
+            if node.role == "AXToolbar", ClaudeInterfaceLabel.canonical(node.label) == "Message actions" {
+                let names = node.children.map { ClaudeInterfaceLabel.canonical($0.label) }
                 return names.contains("Copy") && (names.contains("Retry") || names.contains("Good response") || (format == .code && names.contains("Fork from here")))
             }
             return node.children.contains(where: hasFinalActions)
@@ -174,7 +217,7 @@ enum ClaudeDecoder {
         return latest.map(hasFinalActions) ?? false
     }
     static func position(_ label: String, format: ClaudeTranscriptFormat) -> ClaudeMessagePosition? {
-        let parts = label.split(separator: " ")
+        let parts = ClaudeInterfaceLabel.canonical(label).split(separator: " ")
         guard parts.first == "Message", parts.count >= 2, let n = Int(parts[1]), n > 0 else { return nil }
         if format == .code, parts.count == 2 { return .init(ordinal: n, total: nil) }
         guard parts.count == 4, parts[2] == "of", let total = Int(parts[3]), n <= total else { return nil }
@@ -183,7 +226,7 @@ enum ClaudeDecoder {
     // Code's paragraph siblings belong to the preceding author-marked ordinal,
     // through the next ordinal. Content before the first marker is never read.
     static func codeMessageRanges(_ labels: [String]) throws -> [CodeMessageRange] {
-        for label in labels where label.hasPrefix("Message ") && label != "Message actions" {
+        for label in labels where ClaudeInterfaceLabel.canonical(label).hasPrefix("Message ") && ClaudeInterfaceLabel.canonical(label) != "Message actions" {
             guard position(label, format: .code) != nil else {
                 throw ReplyReadPending(message: "Claude Code 消息序号尚未完整。")
             }
@@ -243,6 +286,7 @@ enum ClaudeDecoder {
     }
     static func codeHeadingAuthor(role: String, label: String) -> ChatMessage.Author? {
         guard role == "AXHeading" else { return nil }
+        let label = ClaudeInterfaceLabel.canonical(label)
         if label.hasPrefix("You said:") { return .user }
         if label.hasPrefix("Claude responded:") { return .assistant }
         return nil
@@ -260,7 +304,7 @@ enum ClaudeDecoder {
         // Some native AX headings expose their name only as a text child.
         // Keep the heading and authorship markers mandatory.
         let names = [node.label, node.text] + node.children.filter { $0.role == "AXStaticText" }.map { $0.text.isEmpty ? $0.label : $0.text }
-        for name in names {
+        for name in names.map(ClaudeInterfaceLabel.canonical) {
             if name.hasPrefix("Claude responded:") { return .assistant }
             if name.hasPrefix("You said:") { return .user }
         }
@@ -275,7 +319,7 @@ enum ClaudeDecoder {
         // The desktop's author-marked answer has a Code group containing its
         // actual text alongside Open in Claude Code / Copy controls.
         if node.role == "AXGroup", node.label == "Code" { return false }
-        if node.role == "AXButton" && ["Copy", "Copy code", "复制", "复制代码"].contains(node.label) { return false }
+        if node.role == "AXButton" && ["Copy", "Copy code"].contains(ClaudeInterfaceLabel.canonical(node.label)) { return false }
         return ["AXButton", "AXPopUpButton", "AXCheckBox", "AXToolbar", "AXTextArea", "AXTextField"].contains(node.role) || node.children.contains(where: hasControls)
     }
     private static func text(_ node: ReplyNode) -> String {
@@ -319,7 +363,8 @@ enum ClaudeDecoder {
             node.role == "AXButton" && fileName(node.label)
         }
         func activityButton(_ node: ReplyNode) -> Bool {
-            node.role == "AXButton" && !fileReference(node) && !["Copy", "Copy code", "Copy to clipboard", "Fork from here", "Read aloud", "Retry", "Good response", "Bad response", "复制", "复制代码"].contains(node.label) && !node.label.hasPrefix("Show message actions")
+            let label = ClaudeInterfaceLabel.canonical(node.label)
+            return node.role == "AXButton" && !fileReference(node) && !["Copy", "Copy code", "Copy to clipboard", "Fork from here", "Read aloud", "Retry", "Good response", "Bad response"].contains(label) && !label.hasPrefix("Show message actions")
         }
         func toolCard(_ node: ReplyNode) -> Bool {
             node.label != "Code" && node.role != "AXToolbar" && headingParent(node) == nil &&
@@ -447,7 +492,23 @@ enum ClaudeDecoder {
                     return footer ? [] : running ? [.tool] : body(child)
                 })
             }
-            return coalesce(node.children.flatMap(body), inlineWhitespace: position(node.label, format: .code) == nil,
+            let parts = node.children.enumerated().flatMap { index, child -> [CodeBodyPart] in
+                // Desktop repeats a tool card's label at the start of its
+                // neighboring flat paragraph. Preserve the formal remainder.
+                var child = child
+                if index > 0, child.role == "AXStaticText" {
+                    let previous = node.children[index - 1]
+                    if toolCard(previous) || activityButton(previous) {
+                        let value = child.text.isEmpty ? child.label : child.text
+                        for prefix in Set(activityText(previous)).filter({ !$0.isEmpty }).sorted(by: { $0.count > $1.count }) where value.hasPrefix(prefix) {
+                            let remainder = value.dropFirst(prefix.count)
+                            if remainder.first?.isWhitespace == true { child.text = String(remainder.drop(while: \.isWhitespace)); break }
+                        }
+                    }
+                }
+                return body(child)
+            }
+            return coalesce(parts, inlineWhitespace: position(node.label, format: .code) == nil,
                             preserveFileReference: node.label != "Code")
         }
         return body(root)
@@ -494,7 +555,7 @@ enum ClaudeDecoder {
                 // The author heading previews the formal answer. New desktop
                 // builds expose thinking summaries as flat siblings before it.
                 let heading = parent.children.first { self.author($0) == author }
-                let names = heading.map { [$0.label, $0.text] + $0.children.filter { $0.role == "AXStaticText" }.map { $0.text.isEmpty ? $0.label : $0.text } } ?? []
+                let names = (heading.map { [$0.label, $0.text] + $0.children.filter { $0.role == "AXStaticText" }.map { $0.text.isEmpty ? $0.label : $0.text } } ?? []).map(ClaudeInterfaceLabel.canonical)
                 let marker = author == .assistant ? "Claude responded:" : "You said:"
                 let preview = normalize(String((names.first { $0.hasPrefix(marker) } ?? marker).dropFirst(marker.count)))
                     .trimmingCharacters(in: CharacterSet(charactersIn: "…"))

@@ -168,11 +168,11 @@ final class ClaudeSource: @unchecked Sendable {
             let role = values[0] as? String ?? ""
             let description = values[1] as? String ?? ""
             let title = values[2] as? String ?? ""
-            var label = description.isEmpty ? title : description
+            var label = ClaudeInterfaceLabel.canonical(description.isEmpty ? title : description)
             if format == .code, let ordinal = try ClaudeDecoder.codePosition(role: role, description: description, title: title) {
                 label = "Message \(ordinal)"
             }
-            let streaming = role == "AXGroup" && [description, title].contains("Currently streaming message")
+            let streaming = role == "AXGroup" && [description, title].map(ClaudeInterfaceLabel.canonical).contains("Currently streaming message")
             return (role, label, values[3] as? [AXUIElement] ?? [], streaming)
         }
         func findTranscript(_ element: AXUIElement, depth: Int) async throws -> AXUIElement? {
@@ -288,7 +288,7 @@ final class ClaudeSource: @unchecked Sendable {
                     throw ReplyReadPending(message: "消息文字尚未完整返回，已丢弃本次读取。")
                 }
                 text = value as? String ?? ""
-                if role == "AXHeading", !text.hasPrefix("Claude responded:"), !text.hasPrefix("You said:") {
+                if role == "AXHeading", !ClaudeInterfaceLabel.canonical(text).hasPrefix("Claude responded:"), !ClaudeInterfaceLabel.canonical(text).hasPrefix("You said:") {
                     text = Self.attribute(element, kAXTitleAttribute) as? String ?? text
                 }
             }

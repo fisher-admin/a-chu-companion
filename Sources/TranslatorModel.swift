@@ -184,6 +184,10 @@ final class TranslatorModel: ObservableObject {
     var onNonClaudeConnection: (String) -> Void = { _ in }
     private let permissionMonitor: AccessibilityPermissionMonitor
     private var target: TargetBridge.Target?
+    var webInputBundle: String? {
+        guard let target, target.app.bundleIdentifier != "com.anthropic.claudefordesktop" else { return nil }
+        return target.app.bundleIdentifier
+    }
     private var outgoingTarget: ManualInputDelivery.Lease?
     private var inputDelivery: ManualInputDelivery { cliDelivery.inputDelivery }
     private var cliReadAssociation: CLITargetBridge.Binding?

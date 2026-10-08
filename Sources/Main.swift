@@ -62,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         usage.requestReport = { [weak self] channel, binding, url in
             guard let self else { throw CancellationError() }
+            if channel == .web, let reason = UsageAcquisition.webSetupError(bundle: model.webInputBundle) { throw BridgeError.message(reason) }
             if !model.bridge.enabled { model.bridge.start() }
             guard model.bridge.enabled else { throw BridgeError.message(model.bridge.status) }
             if channel == .web { try model.bridge.requestUsage(binding: binding, url: url) }
