@@ -30,6 +30,11 @@ jobs:
           python3 -m unittest discover -s Tests -p BridgeTests.py
           python3 -m unittest discover -s Tests -p CLIDeliveryOriginTests.py
           node --test Tests/BridgeChromeTests.cjs Tests/BridgeWorkerTests.cjs
+      - name: Managed Web quota transport and module simulations
+        run: |
+          python3 Tests/ManagedWebUsageTests.py
+          node Tests/ManagedWebModuleTests.cjs
+          node Tests/ManagedWebIntegrationTests.cjs
       - name: Validate documentation and audit history
         run: python3 Tools/check_repository.py --history
   macos:

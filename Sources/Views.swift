@@ -7,7 +7,8 @@ struct MainView: View {
     @ObservedObject var replies: ReplyMonitor
     @ObservedObject var cliNotices: CLINoticeMonitor
     @ObservedObject var usage: ClaudeUsageMonitor
-    init(model: TranslatorModel, usage: ClaudeUsageMonitor) { self.model = model; self.replies = model.replies; self.cliNotices = model.cliNotices; self.usage = usage }
+    @ObservedObject var webUsage: ManagedWebUsage
+    init(model: TranslatorModel, usage: ClaudeUsageMonitor, webUsage: ManagedWebUsage? = nil) { self.model = model; self.replies = model.replies; self.cliNotices = model.cliNotices; self.usage = usage; self.webUsage = webUsage ?? ManagedWebUsage() }
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -207,7 +208,7 @@ struct MainView: View {
             .sheet(isPresented: $replies.showHistoryPicker) { VisibleReplyPicker(replies: replies) }
             .sheet(isPresented: $model.showSettings) { SettingsView(model: model) }
             .sheet(isPresented: $model.showCLIPicker) { CLIConnectionPicker(model: model) }
-            .sheet(isPresented: $usage.showConnection) { ClaudeUsageConnectionView(usage: usage, prepareBridge: {
+            .sheet(isPresented: $usage.showConnection) { ClaudeUsageConnectionView(usage: usage, webUsage: webUsage, prepareBridge: {
                 if !model.bridge.enabled { model.bridge.start() }
                 return model.bridge.connectionPath
             }) }

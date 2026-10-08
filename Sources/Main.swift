@@ -7,11 +7,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static weak var shared: AppDelegate?
     let model = TranslatorModel()
     let usage = ClaudeUsageMonitor()
+    let webUsage = ManagedWebUsage()
     var window: NSWindow!
     var statusItem: NSStatusItem!
     var hotKey: EventHotKeyRef?
     var eventHandler: EventHandlerRef?
     var wakeObserver: NSObjectProtocol?
+    private var panelActivation = UUID()
     func applicationDidFinishLaunching(_ notification: Notification) {
         KeychainAccess.prepare()
         Self.shared = self
@@ -31,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 610, height: 710)
         window.delegate = self
-        window.contentView = NSHostingView(rootView: MainView(model: model, usage: usage))
+        window.contentView = NSHostingView(rootView: MainView(model: model, usage: usage, webUsage: webUsage))
         window.center()
         window.level = .floating
         (window as? NSPanel)?.hidesOnDeactivate = false
@@ -45,28 +47,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         model.replies.onReplyCompleted = { [weak self] in self?.usage.refreshAfterReply() }
         model.bridge.onUsageAccount = { [weak self] observation in self?.usage.receiveAccount(observation) }
         model.bridge.onUsage = { [weak self] evidence in self?.usage.receive(evidence) }
+        webUsage.onBound = { [weak self] binding in self?.usage.follow(channel:.web,binding:binding) }
+        webUsage.onEvidence = { [weak self] evidence in self?.usage.receive(evidence) }
+        webUsage.onInvalid = { [weak self] observation in self?.usage.receiveAccount(observation) }
+        webUsage.onDisconnected = { [weak self] message in
+            guard let self, self.usage.channel == .web else { return }
+            self.usage.awaitChatEntrance(message)
+        }
+        webUsage.connectSelectedPage = { [weak self] in self?.connectSelectedWeb() }
+        webUsage.start()
         model.onClaudeConnection = { [weak self] channel, url in
             guard let self else { return }
             usage.follow(channel: channel, pageURL: url)
-            if channel == .web { usage.acquire(.web, pageURL: url) }
+            if channel == .web, let url {
+                webUsage.bind(url:url,browser:model.webInputBundle)
+                if !webUsage.connecting && webUsage.binding.isEmpty { usage.awaitChatEntrance(webUsage.status) }
+            }
+            else { webUsage.unbind() }
         }
         model.onNonClaudeConnection = { [weak self] name in
+            self?.webUsage.unbind()
             self?.usage.awaitChatEntrance("尚未确认「\(name)」的 Claude 来源；终端请在当前 CLI 输入区按 ⌃⌥E 直接连接")
         }
         model.bridge.onUsageConnection = { [weak self] binding in
             guard let self else { return }
-            guard let binding else { usage.stopFollowing(); usage.awaitChatEntrance(); return }
+            guard let binding else { webUsage.unbind(); usage.stopFollowing(); usage.awaitChatEntrance(); return }
             let channel: ClaudeUsageChannel = binding.hasPrefix("web-") ? .web : .cli
             usage.follow(channel: channel, binding: binding)
             usage.acquire(channel, binding: binding)
         }
         usage.requestReport = { [weak self] channel, binding, url in
             guard let self else { throw CancellationError() }
-            if channel == .web, let reason = UsageAcquisition.webSetupError(bundle: model.webInputBundle) { throw BridgeError.message(reason) }
+            if channel == .web { try webUsage.read(); return }
             if !model.bridge.enabled { model.bridge.start() }
             guard model.bridge.enabled else { throw BridgeError.message(model.bridge.status) }
-            if channel == .web { try model.bridge.requestUsage(binding: binding, url: url) }
-            else { try await UsageAcquisition.run("request-cli") }
+            try await UsageAcquisition.run("request-cli")
         }
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName:NSWorkspace.didWakeNotification,object:nil,queue:.main) { [weak self] _ in
             Task { @MainActor in self?.model.refreshHealth() }
@@ -100,13 +115,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if status != noErr { model.report("⌃⌥E 已被其他软件占用，请使用菜单栏打开A畜伴侣。", error: true) }
     }
     func show(capture: Bool) {
+        let activation = UUID(); panelActivation = activation
         if capture { model.prepareTarget() }
         model.refreshHealth()
+        if capture && webUsage.connecting {
+            Task { [weak self] in
+                guard let self else { return }
+                await self.webUsage.waitForBinding()
+                guard self.panelActivation == activation else { return }
+                self.activatePanel()
+            }
+            return
+        }
+        activatePanel()
+    }
+    private func activatePanel() {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         DispatchQueue.main.async { [weak self] in
             guard let self, let view = Self.findDraft(in: self.window.contentView) else { return }
             self.window.makeFirstResponder(view)
+        }
+    }
+    private func connectSelectedWeb() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let selected = try await model.restoreSelectedWebForQuota()
+                usage.follow(channel:.web,pageURL:selected.url)
+                webUsage.bind(url:selected.url,browser:selected.browser)
+                await webUsage.waitForBinding()
+            } catch { usage.awaitChatEntrance(error.localizedDescription) }
+            show(capture:false)
         }
     }
     static func findDraft(in view: NSView?) -> DraftTextView? {
@@ -134,7 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     func applicationWillTerminate(_ notification: Notification) {
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
-        model.replies.stop(); model.bridge.stop(); model.stopPermissionMonitoring(); usage.stop()
+        webUsage.stop(); model.replies.stop(); model.bridge.stop(); model.stopPermissionMonitoring(); usage.stop()
     }
 }
 

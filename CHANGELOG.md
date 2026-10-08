@@ -4,6 +4,13 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-08 — build 77 — 伴侣管理网页额度连接
+
+- Prepare and manage the quota module inside the companion; normal installation authorization replaces folder and extension-ID setup. / 由伴侣准备、管理额度模块，以正常安装授权替代手动目录和ID配置。
+- Authenticate the uniquely focused, user-selected page before activating the panel. Keep tab identity separate from document/app generations; pairing failure does not block sending or translation. / 面板取得焦点前核对唯一的手选网页，区分标签与页面及程序代次，额度连接失败不阻断发送和翻译。
+- Persist local transport grants; relay masked identity and quota, clear failed reads, and recover temporary heartbeat loss without another grant. / 保留本机接口授权，仅传遮蔽账户和额度，读取失败隐藏旧值，短时失联恢复不重新授权。
+- Preserve build76 and all earlier results; real runtime authorization and Claude quota remain separate acceptance steps. / 保留build76及全部旧结果，真实组件授权和额度另列验收。见[记录](docs/testing/companion-managed-web-usage-2026-10-08.md)。
+
 ## 1.1.8 — 2026-10-08 — build 76 — 网页Code会话地址与持续读取
 
 - Recognize the official Web Code homepage and `session_…` routes as Code transcripts, keeping polling active through the mode transition. Unrelated paths remain excluded. / 补齐官方网页Code首页和会话地址识别，切换模式时保持轮询；无关页面仍排除。

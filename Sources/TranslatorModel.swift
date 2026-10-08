@@ -188,6 +188,22 @@ final class TranslatorModel: ObservableObject {
         guard let target, target.app.bundleIdentifier != "com.anthropic.claudefordesktop" else { return nil }
         return target.app.bundleIdentifier
     }
+    /// Returns to the input already selected by the user. No text, clipboard,
+    /// draft inspection or alternative-window search is involved.
+    func restoreSelectedWebForQuota() async throws -> (url: String, browser: String?) {
+        guard let target, target.app.bundleIdentifier != "com.anthropic.claudefordesktop",
+              let location = outgoingTarget?.location else { throw BridgeError.message("请先在 Claude 网页输入区按 ⌃⌥E 指定窗口。") }
+        try inputDelivery.validate(location)
+        ManualInputDelivery.restore(location)
+        for _ in 0..<16 {
+            if ManualInputDelivery.focused(location) { break }
+            try await Task.sleep(for:.milliseconds(50))
+        }
+        guard ManualInputDelivery.focused(location), let url = TargetBridge.conversationURL(location.input) else {
+            throw BridgeError.message("此前指定的网页输入区暂不可用，请在该输入区重新连接。")
+        }
+        return (url, target.app.bundleIdentifier)
+    }
     private var outgoingTarget: ManualInputDelivery.Lease?
     private var inputDelivery: ManualInputDelivery { cliDelivery.inputDelivery }
     private var cliReadAssociation: CLITargetBridge.Binding?

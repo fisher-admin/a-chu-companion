@@ -65,6 +65,7 @@ struct ClaudeUsageView: View {
 
 struct ClaudeUsageConnectionView: View {
     @ObservedObject var usage: ClaudeUsageMonitor
+    @ObservedObject var webUsage: ManagedWebUsage
     @Environment(\.dismiss) private var dismiss
     @State private var channel: ClaudeUsageChannel = .desktop
     @State private var selectedBinding = ""
@@ -75,8 +76,6 @@ struct ClaudeUsageConnectionView: View {
     @State private var account = ""
     @State private var confirm = false
     @State private var installingCLI = false
-    @State private var extensionID = ""
-    @State private var nativeBrowser = "Chrome"
     var prepareBridge: () -> String = { "" }
     private var choices: [UsageEvidence] { usage.candidates(for: channel) }
     private var selected: UsageEvidence? {
@@ -100,24 +99,22 @@ struct ClaudeUsageConnectionView: View {
                         Button("读取已打开的桌面 Usage（待验收）") { Task { await usage.captureVisibleUsage() } }
                             .disabled(CompanionPreferences.simulated)
                     } else if channel == .web {
-                        Text("连接 Claude 网页聊天时自动获取当前账户额度。首次需要启用网页入口；设置中的按钮用于补充获取和排查。接口只核对唯一组织，多组织不猜测。")
+                        Text("伴侣准备并管理网页额度接口。首次只需确认组件安装授权，之后跟随你指定的 Claude 网页账户；切换账户先隐藏旧额度。")
                         HStack {
-                            Button("获取网页额度") { error = ""; usage.acquire(.web) }.buttonStyle(.borderedProminent).disabled(usage.acquiring || CompanionPreferences.simulated)
+                            Button(webUsage.authorized ? "授权当前网页" : "连接网页额度") { webUsage.prepareAuthorization() }
+                                .buttonStyle(.borderedProminent).disabled(!webUsage.available || CompanionPreferences.simulated)
+                            Button("连接已指定网页") { dismiss(); webUsage.connectSelectedPage() }
+                                .disabled(!webUsage.hasSelectedTarget || webUsage.connecting || CompanionPreferences.simulated)
+                        }
+                        HStack {
+                            Button("刷新网页额度") { error = ""; usage.acquire(.web) }
+                                .disabled(usage.acquiring || webUsage.binding.isEmpty || CompanionPreferences.simulated)
                             Button("打开官方 Usage") { UsageAcquisition.openWebUsage() }
                         }
-                        DisclosureGroup("配置网页入口与手动测试") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Button("打开网页入口文件夹") { UsageAcquisition.revealWebAdapter() }
-                                Picker("安装载体", selection: $nativeBrowser) { Text("Chrome").tag("Chrome"); Text("Edge").tag("Edge") }
-                                TextField("入口扩展 ID（32 位）", text: $extensionID).textFieldStyle(.roundedBorder)
-                                Button("连接网页入口到伴侣") {
-                                    let path = prepareBridge()
-                                    Task { do { try await UsageAcquisition.installWeb(extensionID: extensionID, browser: nativeBrowser, connection: path); error = "本机入口已连接；请在 claude.ai 点击扩展图标启用。" } catch { self.error = error.localizedDescription } }
-                                }.disabled(CompanionPreferences.simulated)
-                                Text("Chrome / Edge：安装随附入口并连接本机 native host，在 claude.ai 标签点击入口图标启用。Safari 尚未提供入口，不能显示为已支持。完整步骤见随附 Bridge/README.md。")
-                                Text("启用后连接聊天，核对遮蔽账户、5小时及每周百分比与重置时间；切换账户时旧值应隐藏。获取失败时不以桌面登录代替。")
-                            }.padding(.top, 8)
-                        }
+                        Text(webUsage.status).font(.system(size:11)).foregroundStyle(.secondary)
+                        Text("本机已有网页组件时会打开正常安装授权。无需选择扩展文件夹或填写 ID；未获准运行的组件不会显示为已连接。网页额度不可用时，发送、读取和翻译仍可继续。")
+                        Button("撤销网页额度授权", role:.destructive) { webUsage.revoke() }
+                            .disabled(!webUsage.authorized || CompanionPreferences.simulated)
                     } else {
                         Text("依据 Claude Code 官方会话和状态栏读取，与终端品牌无关。新会话核对当前登录；换账户后，旧会话额度失效，需启动新会话。")
                         Text("只读取订阅额度，不计 API 费用。未安装会话身份入口的旧会话，可以读取正文，但额度身份待核对。")

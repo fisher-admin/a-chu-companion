@@ -17,7 +17,7 @@ swiftc -swift-version 5 -O -target arm64-apple-macos15.0 -module-cache-path "$PW
 swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/CompanionIcon.swift Tools/GenerateIcons.swift -o .build/generate-icons
 .build/generate-icons "$staging/AChuCompanion.iconset"
 cp -R Bridge "$app/Contents/Resources/Bridge"
-rm -rf "$app/Contents/Resources/Bridge/__pycache__"
+for cache in "$app/Contents/Resources/Bridge"/**/__pycache__(N/); do rm -rf "$cache"; done
 iconutil -c icns -o "$app/Contents/Resources/AChuCompanion.icns" "$staging/AChuCompanion.iconset"
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -29,7 +29,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>AChuCompanion</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>1.1.8</string>
-    <key>CFBundleVersion</key><string>76</string>
+    <key>CFBundleVersion</key><string>77</string>
 <key>CFBundleIconFile</key><string>AChuCompanion</string>
 <key>LSMinimumSystemVersion</key><string>15.0</string>
 <key>LSUIElement</key><true/>

@@ -14,6 +14,8 @@
 
 **Claude 额度**：可以读取当前桌面登录或保存指定 session。指定凭据在本程序钥匙串；桌面 Cookie 数据库留在 Claude 原目录，读取不修改它。首次桌面连接可能请求读取 Claude Safe Storage；后台自动查询禁止重复弹出授权。查询只向 claude.ai 发只读组织／额度请求，携带相应会话凭据，不发送聊天正文、不调用模型、不统计 API 计费。网页／桌面不同账户需用户连接对应来源。
 
+**伴侣管理网页额度（build77）**：网页模块仅在claude.ai使用页面已有登录同源获取当前账户与额度，不使用Cookie API，不转发Cookie、完整邮箱、聊天正文或登录令牌。只向127.0.0.1认证接口发送遮蔽账户、身份指纹、百分比和重置时间。首次安装由用户授权；本机传输密钥保存在脚本管理器隔离存储和伴侣用户私有目录，非Claude登录凭据。它们不随仓库发布。账户变化、退出或失联先隐藏旧值；撤销授权关闭此接入，不影响聊天收发。当前需要已有获准运行的网页组件；独立WebView登录不能冒充外部浏览器当前账户。
+
 **偏好与签名**：语言、字号、发送方式和服务地址等偏好保存在本机。安装脚本在用户钥匙串创建／复用不可导出的本机签名私钥，签名配置留在应用支持目录。它们不随仓库发布，不改变系统证书信任，不是 Apple 公证。
 
 **反馈和 CI**：公共 Issue、PR、Actions 日志与发布内容可被其他人读取，请只提供模拟／脱敏材料。CI 使用本机模拟接口和虚构凭据，不访问个人登录。检查工具不打印匹配到的密钥内容。没有扫描器能够保证发现所有类型的敏感内容。
@@ -22,7 +24,7 @@
 
 Accessibility is used for the bound Claude conversation and composer, not to collect conversations from unrelated apps. Reading follows conversations within that window. Closing the window, leaving Claude, or revoking permission can stop reading or produce a notice. Ten completed reply translations and bounded pending content live in memory; chat content is not persisted by the companion. Exiting clears it; clearing local records does not delete Claude's server-side history.
 
-Delivery temporarily uses the clipboard and restores it when it still belongs to the operation. The target and pasted text are checked before the configured send key is attempted. Auto-send is optional; a successful keypress is not proof of server receipt.
+Delivery temporarily uses the clipboard and restores it when it still belongs to the operation. It restores the input manually selected by the user, then pastes and optionally presses Return. It does not inspect input suggestions, read back pasted text or add translation-quality approval. Auto-send is optional; a successful keypress is not proof of server receipt.
 
 Default translation uses Apple Translation without a translation API key. Initial packs may download, installed packs are reused, and processing follows macOS system translation behavior. Optional AI translation sends drafts and foreign replies to the configured provider, whose retention, pricing, and processing policies apply. Keys live in Keychain; the project does not proxy that service.
 
@@ -57,3 +59,5 @@ Ordinary table geometry and numeric cells remain local. Gemini receives only tra
 上述 build54 DOM 账户采集被网页同源只读请求替代。用户启用的官方 claude.ai 标签使用浏览器已有会话请求账户与唯一组织额度，并在请求前后核对身份。没有 Cookie 读取权限，不提取、保存或传递 Cookie/OAuth；原始账户响应、邮箱和组织标识只在页面采集器短暂处理，本机只收遮蔽名称、指纹和限额。多组织不猜测。停止、导航或身份变化使未完成请求失效。请求与聊天正文读取独立，私有接口结构变化会明确失败。
 
 聊天连接自动使用经过核对的同一来源报告；手动 session 仍是独立来源，不自动跟随浏览器。CLI 设置动作仅包装用户原状态栏并加入本工具会话入口，可撤回；不会读取 OAuth，不因获取报告而向模型发送消息。状态栏定时/主动重跑只能称“当前报告”，不能证明服务器刷新。正常启动不自动安装扩展或修改个人 CLI 配置。
+
+Managed Web usage (build77) uses the actual page login through same-origin requests, without Cookie APIs, chat text, full email or login tokens in the relay. Only masked identity and quota reach the authenticated loopback interface. Transport grants live in isolated userscript storage and the companion private directory; these are not Claude credentials and are not distributed. Revocation and invalid identity clear Web quota independently of chat. A permitted runtime is currently required; an independent WebView login is not treated as the external browser account.

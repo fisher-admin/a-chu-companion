@@ -1,5 +1,13 @@
 # A畜伴侣只读桥接 / Read-only bridge
 
+## 当前网页额度连接（build77）
+
+在已指定Claude网页后，从伴侣「连接额度 → 网页端」发起授权。程序准备额度模块和本机接口，浏览器只显示正常安装授权；无需加载文件夹、填写ID或自行配置native host。已有获准运行的Tampermonkey是本机接入条件，正式商店组件尚未发布。授权后「连接已指定网页」返回原手选输入区并配对；刷新为补充。不读取Cookie或正文，只传遮蔽账户与额度。见[验收与限制](../docs/testing/companion-managed-web-usage-2026-10-08.md)。
+
+English: The companion prepares the quota-only module and loopback interface. Users handle normal installation authorization, without folders or IDs. A permitted Tampermonkey runtime is currently required; the Store component is not yet published. The companion pairs the previously selected page. No Cookie or chat text is relayed.
+
+下方按原版本保留历史流程；当前三端发送以build74手选输入规则为准，旧版接收核对和质量审核不再适用。
+
 ## build69：CLI自动填入
 
 桥接传输仍然只读；自动输入由伴侣独立的本机窗口绑定完成。在已登录Claude Code的输入区（可保留推荐文字）按实体 **Control＋Option＋E**，核对底部会话编号和20位「输入」标记。只在唯一匹配当前窗口、焦点、会话及存活前台CLI进程后启用自动填入；单独选择会话只开启读取和额度，不凭最新报告猜测发送目标。旧无输入标记报文保持只读。
