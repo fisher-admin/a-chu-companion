@@ -83,16 +83,30 @@ enum TranslationFidelity {
         if added.contains(.quote) { throw TranslationFidelityError(reason: "原文没有的引用") }
         let limit = lengthFactor(target) * weightedLength(source) + 48
         if weightedLength(translation) > limit { throw TranslationFidelityError(reason: "译文远长于原文，可能附加了回答或解释") }
-        // English and German questions keep a question mark; Japanese and
-        // Korean questions can legitimately end otherwise, so they are exempt.
+        // A direct English/German question keeps its question mark. A request
+        // to explain whether something holds is an indirect question and may
+        // legitimately use a period. Require matching source/target clauses;
+        // an unrelated earlier explanation must not exempt a direct question.
         if case let .foreign(language) = target, [.english, .german].contains(language),
-           endsWithQuestion(source), !endsWithQuestion(translation) {
+           endsWithQuestion(source), !endsWithQuestion(translation),
+           !matchingIndirectQuestion(source: source, translation: translation, language: language) {
             throw TranslationFidelityError(reason: "原文是问句，译文结尾却不是问句")
         }
         if endsWithQuestion(source), !questionLike(translation, target: target),
            translation.range(of: #"(?i)^\s*(?:yes\b|no\b|ja\b|nein\b|是的|不是|はい|いいえ|네[,.，。\s]|아니요)"#, options: .regularExpression) != nil {
             throw TranslationFidelityError(reason: "译文回答了原文的问题")
         }
+    }
+
+    private static func matchingIndirectQuestion(source: String, translation: String, language: TranslationLanguage) -> Bool {
+        guard source.range(of: #"(?:说明|解释|判断|检查|核对)[^。！？?\n]{0,80}(?:是否|能否)[^。！？?\n]*[？?][\s\"'”’」』）)\]】*_]*$"#, options: .regularExpression) != nil else { return false }
+        let pattern: String
+        switch language {
+        case .english: pattern = #"(?i)\b(?:explain|clarify|determine|check|assess)\b[^.!?\n]{0,160}\bwhether\b"#
+        case .german: pattern = #"(?i)\b(?:erklär\w*|prüf\w*|beurteil\w*|klär\w*)\b[^.!?\n]{0,160}\bob\b"#
+        default: return false
+        }
+        return translation.range(of: pattern, options: .regularExpression) != nil
     }
 
     private static func clearNegativeCommand(_ text: String) -> Bool {

@@ -4,6 +4,13 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-07 — build 66 — installed / 间接问句修订
+
+- Accept matching English/German indirect questions for Chinese requests such as “explain whether”, without requiring a trailing question mark. Direct questions becoming answers and added assertions remain checked. / 中文“请说明是否……”可忠实译成以句号结尾的英/德间接问句；直接问题变答案、附加内容的保护仍保留。
+- Add six regression cases: 34 quality checks first reproduced two false rejections, then passed. All 32 groups / 585 declared checks and 19 loopback HTTP checks passed; unsigned packaging and unchanged-identity installation verified. / 新增6项用例，34项质量检查先复现2项误拦再全部通过；完整32组585项、本机HTTP19项通过，构建与原签名安装已核对。
+- Align the actual-language test harness with production literal protection. All four system round trips and 49,031-character / 1,400-paragraph translation preserve the final marker; retain the old unprotected-harness failure. / 真实语言测试使用正式文字保护；系统四语言往返及49,031字符的1,400段和尾标记通过，保留旧脚本绕过保护的失败。
+- Preserve build65 and keep live service/access failures distinct from simulated acceptance. See the [execution record](docs/testing/optimization-results-2026-10-07.md). / 保留build65；真实服务拒绝、钥匙串等待及未完成三端验收单独记录，不用模拟结果代替。
+
 ## 1.1.8 — 2026-10-07 — build 65 — installed / 实测问题修订
 
 - Add a review notice for the observed statistical training-fold/discount mistranslation, without rewriting normal discount sentences. / 针对系统实测“训练折内→training discount”增加狭窄核对提示，保留候选并暂停自动发送；普通折扣语句不被改写。

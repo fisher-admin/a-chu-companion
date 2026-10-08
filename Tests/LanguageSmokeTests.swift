@@ -16,10 +16,18 @@ import Translation
             guard forward == .installed, reverse == .installed else { ready = false; continue }
             if #available(macOS 26.0, *) {
                 let outgoing = TranslationSession(installedSource: chinese, target: other)
-                let result = try await TextTranslation.run("请保留现有设置。") { try await outgoing.translate($0).targetText }
+                let result = try await TranslationFidelity.$target.withValue(.foreign(language)) {
+                    try await TextTranslation.runProtected("请保留现有设置。") { text in
+                        try await SystemTranslationProtection.translate(text, toChinese: false) { try await outgoing.translate($0).targetText }
+                    }
+                }
                 precondition(!result.isEmpty && result != "请保留现有设置。")
                 let incoming = TranslationSession(installedSource: other, target: chinese)
-                let back = try await TextTranslation.run(result) { try await incoming.translate($0).targetText }
+                let back = try await TranslationFidelity.$target.withValue(.chinese) {
+                    try await TextTranslation.runProtected(result) { text in
+                        try await SystemTranslationProtection.translate(text, toChinese: true) { try await incoming.translate($0).targetText }
+                    }
+                }
                 precondition(back.contains("设置"))
                 print("PASS: \(language.name) actual round trip: \(result) -> \(back)")
             } else { ready = false }
@@ -28,9 +36,13 @@ import Translation
             let source = String(repeating: "Please keep the existing settings.\n", count: 1_400) + "Final marker: COMPLETE-49K-END."
             let session = TranslationSession(installedSource: .init(identifier: "en"), target: chinese)
             try ForeignTextPolicy.validate(source, incoming: true)
-            let translated = try await TextTranslation.run(source, progress: { part, total in
+            let translated = try await TranslationFidelity.$target.withValue(.chinese) {
+                try await TextTranslation.run(source, progress: { part, total in
                 if part == 1 || part.isMultiple(of: 10) || part == total { print("Long reply: \(part)/\(total)"); fflush(stdout) }
-            }) { try await session.translate($0).targetText }
+                }) { text in
+                    try await SystemTranslationProtection.translate(text, toChinese: true) { try await session.translate($0).targetText }
+                }
+            }
             try translated.write(toFile: ".build/system-long-result.txt", atomically: true, encoding: .utf8)
             print("Long metrics: settings=\(translated.components(separatedBy: "设置").count - 1), length=\(translated.count), tail=\(translated.suffix(200))")
             precondition(translated.components(separatedBy: "设置").count - 1 == 1_400 && translated.suffix(100).contains("49K") && (translated.suffix(100).contains("标记") || translated.suffix(100).contains("marker")), "The complete long reply must retain every paragraph and its final marker")

@@ -39,6 +39,12 @@ import AppKit
         check(TranslationFidelity.reviewReasons(source: "训练折扣", translation: "Training discount", target: .foreign(.english)).isEmpty, "ordinary discounts are not reinterpreted as statistics")
         check(!TranslationFidelity.reviewReasons(source: "请保留原有设置。", translation: "请保留原有设置。", target: .foreign(.english)).isEmpty, "untranslated Chinese cannot silently pass an English delivery gate")
         check(TranslationFidelity.reviewReasons(source: "请保留原有设置。", translation: "元の設定を維持してください。", target: .foreign(.japanese)).isEmpty, "valid Japanese Han characters are not treated as untranslated Chinese")
+        check(!(await rejected("请说明结果是否可靠？", "Please explain whether the result is reliable.", target: .foreign(.english))), "a faithful indirect English question need not end in a question mark")
+        check(!(await rejected("请说明结果是否可靠？", "Bitte erklären Sie, ob das Ergebnis zuverlässig ist.", target: .foreign(.german))), "a faithful indirect German question need not end in a question mark")
+        check(await rejected("结果可靠吗？", "The result is reliable.", target: .foreign(.english)), "a direct question cannot become a declarative answer")
+        check(await rejected("请说明结果是否可靠？", "Yes, the result is reliable.", target: .foreign(.english)), "an indirect question cannot become a yes answer")
+        check(await rejected("请解释结论。结果可靠吗？", "Please explain the conclusion. The result is reliable.", target: .foreign(.english)), "an earlier explanation command cannot exempt a later direct question")
+        check(!TranslationFidelity.reviewReasons(source: "请说明结果是否可靠？", translation: "Please explain whether the result is reliable. Yes, it is.", target: .foreign(.english)).isEmpty, "an answer appended to an indirect question still requires review")
         let mixed = "你能解释 `config.json` 吗？"
         let assembled = try await TranslationFidelity.$target.withValue(.foreign(.english)) {
             try await TextTranslation.runProtected(mixed) { source in source.contains("解释") ? "Can you explain" : "?" }
