@@ -9,6 +9,7 @@ struct BridgeSourceDetails: Equatable {
 struct BridgeUpdate {
     let binding: String
     var source: BridgeSourceDetails? = nil
+    var delivery: CLIDeliveryOrigin? = nil
     var snapshot: ReplySnapshot? = nil
     var evidence: UsageEvidence? = nil
     var accountObservation: UsageAccountObservation? = nil
@@ -56,7 +57,7 @@ struct BridgeDecoder {
         streams[binding] = stream
     }
     mutating func accept(_ data: Data, token: String) throws -> BridgeUpdate {
-        let allowed: Set<String> = ["version","token","kind","binding","epoch","sequence","messageID","turnID","text","final","url","messages","usage","account","source"]
+        let allowed: Set<String> = ["version","token","kind","binding","epoch","sequence","messageID","turnID","text","final","url","messages","usage","account","source","delivery"]
         guard data.count <= 8 * 1024 * 1024,
               let body = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(body.keys).isSubset(of: allowed), integer(body["version"]) == 1,
@@ -67,6 +68,16 @@ struct BridgeDecoder {
               let epoch = body["epoch"] as? String, !epoch.isEmpty, epoch.count <= 128,
               let sequence = integer(body["sequence"]), sequence >= 0 else { throw BridgeError.message("桥接报文或权限无效，未采用。") }
         var source: BridgeSourceDetails?
+        var delivery: CLIDeliveryOrigin?
+        if let raw = body["delivery"] {
+            guard kind == "usage", binding.hasPrefix("cli-"), let value = raw as? [String: Any],
+                  Set(value.keys) == ["pid","tty","started","tag"], let pid = integer(value["pid"]),
+                  let tty = value["tty"] as? String, let started = value["started"] as? String,
+                  let tag = value["tag"] as? String else { throw BridgeError.message("CLI 输入来源无效。") }
+            let origin = CLIDeliveryOrigin(pid: Int32(pid), tty: tty, started: started, tag: tag)
+            guard origin.valid(for: binding) else { throw BridgeError.message("CLI 输入来源不匹配。") }
+            delivery = origin
+        }
         if let raw = body["source"] {
             guard binding.hasPrefix("cli-"), let value = raw as? [String: Any], Set(value.keys).isSubset(of: ["workspace","model"]) else {
                 throw BridgeError.message("CLI 来源摘要无效。")
@@ -111,7 +122,7 @@ struct BridgeDecoder {
             let evidenceSource: UsageEvidenceSource = binding.hasPrefix("web-") ? .usagePage : .statusLine
             let observation = UsageAccountObservation(source: evidenceSource, binding: binding, epoch: epoch, sequence: sequence, identity: identity)
             let evidence = parsed.map { UsageEvidence(source: evidenceSource, binding: binding, snapshot: $0.snapshot, identity: identity, epoch: epoch, sequence: sequence, pageURL: body["url"] as? String) }
-            return .init(binding: binding, source: source, evidence: evidence, accountObservation: evidence == nil ? observation : nil)
+            return .init(binding: binding, source: source, delivery: delivery, evidence: evidence, accountObservation: evidence == nil ? observation : nil)
         }
         let conversation = "bridge:" + binding + ":" + epoch
         var stream = streams[binding].flatMap { $0.epoch == epoch ? $0 : nil } ?? Stream(epoch: epoch)

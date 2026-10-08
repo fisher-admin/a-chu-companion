@@ -30,7 +30,7 @@ struct MainView: View {
                 Circle().fill(model.hasTarget || replies.watching ? .green : .orange).frame(width: 7, height: 7)
                 Text(model.hasTarget ? model.targetName + (replies.watching ? " · 正在读取" : " · 读取已停止") : (replies.watching ? replies.sourceName + " · 正在读取（只读）" : "未连接 Claude"))
                     .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).help(model.hasTarget ? model.targetName : replies.sourceName)
-                if !model.hasTarget {
+                if !model.hasTarget || model.isCLIConnection {
                     Button("连接 CLI") { model.connectCLI(releaseSelection: false) }
                         .controlSize(.mini).fixedSize().disabled(model.busy)
                 }
@@ -77,7 +77,7 @@ struct MainView: View {
                                 Text("消息译成所选语言，回复自动译回中文。\n在这里写消息、看回复，继续同一个对话。")
                                     .font(.system(size: 13)).foregroundStyle(.secondary).lineSpacing(5)
                                 if model.isCLIConnection {
-                                    Label("中文译文可复制后回终端粘贴；回复将自动读取", systemImage: "doc.on.doc")
+                                    Label(model.hasTarget ? "译文自动填入原终端；多行或折叠长文需在终端确认发送" : "在终端空输入区按 ⌃⌥E 绑定自动填入；也可复制译文", systemImage: "terminal")
                                         .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 4)
                                 } else if !model.hasTarget {
                                     Label("点击 Claude 输入框，再按 ⌃⌥E 连接", systemImage: "link")
@@ -140,13 +140,13 @@ struct MainView: View {
                                 .padding(.horizontal, 12).padding(.vertical, 12).allowsHitTesting(false)
                         }
                     }.frame(height: min(160, max(76, CGFloat(model.input.split(separator: "\n", omittingEmptySubsequences: false).count) * 20 + 24)))
-                    Text(model.isCLIConnection ? "回车翻译 · 复制译文后回终端按 ⌘V，再确认发送" : "回车提交 · Shift + 回车换行")
+                    Text(model.isCLIConnection && !model.hasTarget ? "只读连接 · 在终端空输入区按 ⌃⌥E 可绑定自动填入" : "回车提交 · Shift + 回车换行")
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }.padding(12)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
                     .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.10)))
                 HStack(spacing: 6) {
-                    if !model.isCLIConnection {
+                    if !model.isCLIConnection || model.hasTarget {
                         Toggle("填入后发送", isOn: $model.autoSend).toggleStyle(.checkbox).disabled(model.busy)
                             .font(.system(size: 11)).fixedSize()
                     }
@@ -165,9 +165,9 @@ struct MainView: View {
                         Spacer(minLength: 0)
                         if !model.output.isEmpty {
                             Button("复制译文", systemImage: "doc.on.doc") { model.copyOutput() }
-                                .help(model.isCLIConnection ? "复制完整译文，回到 Claude Code 按 ⌘V 粘贴，再确认发送" : "复制完整译文")
+                                .help(model.isCLIConnection && !model.hasTarget ? "复制完整译文，回到 Claude Code 按 ⌘V 粘贴，再确认发送" : "复制完整译文作为备用")
                         }
-                        if !model.isCLIConnection {
+                        if !model.isCLIConnection || model.hasTarget {
                             Button { model.begin(insert: true) } label: {
                                 Label(model.autoSend ? "发送给 Claude" : "翻译并填入", systemImage: "paperplane.fill")
                             }
@@ -211,7 +211,7 @@ struct CLIConnectionPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("选择 Claude Code 会话").font(.title2.bold())
-            Text("对照终端底部「A畜伴侣 CLI」的编号，选择你正在使用的会话。不同终端程序均使用这个编号；最近报告不代表当前前台会话。")
+            Text("自动填入请先在 Claude Code 的空输入区按 ⌃⌥E，核对底部输入标记。仅在此处选择来源可开启读取；报告时间不代表当前窗口。")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
             ScrollView {
                 VStack(spacing: 10) {
@@ -229,7 +229,7 @@ struct CLIConnectionPicker: View {
                                 }
                                 Text(source.reportDescription + (source.source?.model.map { " · " + $0 } ?? ""))
                                     .font(.system(size: 11)).foregroundStyle(.secondary)
-                                Text(source.hasReplies ? "已接收正文" : "已收到报告，等待正式回复")
+                                Text((source.hasReplies ? "已接收正文" : "等待正式回复") + (source.delivery != nil ? " · 可核对输入来源" : " · 只读来源"))
                                     .font(.system(size: 11)).foregroundStyle(.secondary)
                             }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))

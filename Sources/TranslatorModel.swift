@@ -180,6 +180,10 @@ final class TranslatorModel: ObservableObject {
     var onNonClaudeConnection: (String) -> Void = { _ in }
     private let permissionMonitor: AccessibilityPermissionMonitor
     private var target: TargetBridge.Target?
+    private var cliTarget: CLITargetBridge.Binding?
+    private var pendingCLISurface: CLITargetBridge.Surface?
+    private let cliDelivery: CLITargetBridge
+    var cliCapture: () throws -> CLITargetBridge.Surface = { try CLITargetBridge.capture() }
     private var task: Task<Void, Never>?
     private var appleSession: TranslationSession?
     private var preparationWatchdog: Task<Void, Never>?
@@ -189,6 +193,7 @@ final class TranslatorModel: ObservableObject {
     private var activeID: UUID?
     private var connectionRequestID: UUID?
     private var connectionTask: Task<Void, Never>?
+    private var cliBindingTask: Task<Void, Never>?
     var cliEntryRequest: @MainActor (String) async throws -> Void = { path in
         try await UsageAcquisition.run("install-cli", connection: path)
         try Task.checkCancellation()
@@ -203,6 +208,7 @@ final class TranslatorModel: ObservableObject {
         let send: Bool
         let commandReturn: Bool
         let language: TranslationLanguage
+        var cli: CLITargetBridge.Binding? = nil
         /// Set when the system translation replaces a failed remote result.
         /// Such a draft is only shown for review; it is never inserted or sent.
         var fallbackReason: String? = nil
@@ -213,10 +219,12 @@ final class TranslatorModel: ObservableObject {
          permissionInterval: UInt64 = 1_000_000_000,
          applePreparationTimeout: Duration = .seconds(120),
          remoteKeyRead: ((RemoteTranslationProvider) throws -> String)? = nil,
+         cliDelivery: CLITargetBridge? = nil,
          credentialPresence: @escaping (RemoteTranslationProvider, String) -> CredentialPresence = { Credentials.presence(provider:$0,baseURL:$1) }) {
         Credentials.bindLegacyConfiguration(settings: CompanionPreferences.store)
         self.applePreparationTimeout = applePreparationTimeout
         self.remoteKeyRead = remoteKeyRead
+        self.cliDelivery = cliDelivery ?? CLITargetBridge()
         self.credentialPresence = credentialPresence
         permission = permissionCheck()
         permissionMonitor = AccessibilityPermissionMonitor(check: permissionCheck, interval: permissionInterval)
@@ -237,22 +245,35 @@ final class TranslatorModel: ObservableObject {
         replies.onReplyAcquired = { [weak self] id, foreign, language in self?.recordReplyOriginal(id: id, foreign: foreign, language: language) }
         replies.onReply = { [weak self] id, foreign, chinese, language in self?.recordReply(id: id, foreign: foreign, chinese: chinese, language: language) }
         replies.onReplyState = { [weak self] id, complete in self?.markReply(id: id, complete: complete) }
-        bridge.onStop = { [weak self] in self?.replies.stop(); self?.retireConnectionRequest() }
+        bridge.onStop = { [weak self] in
+            guard let self else { return }
+            replies.stop(); retireConnectionRequest(); cliTarget = nil; pendingCLISurface = nil
+            hasTarget = target != nil
+        }
         bridge.onTick = { [weak self] in self?.replies.tick() }
         bridge.onSelection = { [weak self] in
             guard let self else { return }
-            retireConnectionRequest(); replies.stop(); target = nil; hasTarget = false
+            retireConnectionRequest(); replies.stop(); target = nil; cliTarget = nil; hasTarget = false
             if !bridge.selected.isEmpty {
                 showCLIPicker = false
                 replies.watching = true
                 replies.sourceName = bridge.selectedName
                 replies.status = "已选择只读会话，等待正式回复；输入可翻译和复制。"
                 targetName = replies.sourceName; report(replies.status)
+                bindSelectedCLI()
             }
+        }
+        bridge.onCLIReport = { [weak self] in
+            guard let self else { return }
+            if let bound = cliTarget, bridge.choices.first(where: { $0.id == bound.session })?.delivery != bound.origin {
+                cliTarget = nil; hasTarget = false
+                report("CLI 输入来源发生变化，自动填入已暂停。回复读取保持；请回到当前输入区按 ⌃⌥E。")
+            }
+            matchCapturedCLI()
         }
         bridge.onSnapshot = { [weak self] snapshot in
             guard let self else { return }
-            target = nil; hasTarget = false; targetName = bridge.selectedName
+            target = nil; hasTarget = cliTarget != nil; targetName = bridge.selectedName
             replies.watching = true; replies.sourceName = targetName
             replies.configure(engine: engine, baseURL: baseURL, model: activeAIModel, language: language)
             replies.ingest(snapshot)
@@ -277,8 +298,13 @@ final class TranslatorModel: ObservableObject {
         }
     }
     func handleCaptureFailure(_ error: Error, bundle: String?) {
-        guard bundle == "com.anthropic.claudefordesktop" || busy else { connectCLI(); return }
-        retireConnectionRequest(); target = nil; hasTarget = false; targetName = "未选择输入框"
+        guard bundle == "com.anthropic.claudefordesktop" || busy else {
+            let surface = try? cliCapture()
+            connectCLI(); pendingCLISurface = surface
+            awaitCLIFooter()
+            return
+        }
+        retireConnectionRequest(); target = nil; cliTarget = nil; pendingCLISurface = nil; hasTarget = false; targetName = "未选择输入框"
         if bridge.enabled { bridge.clearSelection() } else { replies.stop() }
         showCLIPicker = false
         report(error.localizedDescription, error: true)
@@ -287,19 +313,48 @@ final class TranslatorModel: ObservableObject {
         retireConnectionRequest()
         guard TargetBridge.nativeReplySupported(bundle: captured.app.bundleIdentifier, conversation: captured.conversation) else {
             onNonClaudeConnection(captured.name)
+            let surface = try? cliCapture()
             connectCLI()
+            pendingCLISurface = surface
+            awaitCLIFooter()
             return
         }
+        cliTarget = nil; pendingCLISurface = nil
         target = captured; targetName = captured.name; hasTarget = true
         status = "\(language.name)译文将填入 \(targetName) 的原输入框。"; isError = false
         bridge.stop(); startReplyReading()
     }
     private func retireConnectionRequest() {
         connectionRequestID = nil; connectionTask?.cancel(); connectionTask = nil
+        cliBindingTask?.cancel(); cliBindingTask = nil
+    }
+    private func matchCapturedCLI() {
+        guard let surface = pendingCLISurface, cliTarget == nil, bridge.selected.isEmpty else { return }
+        // Reports can precede terminal redraw. Pair by the current pane's
+        // strong footer only; never by report recency or the only candidate.
+        let matches = bridge.cliChoices.filter { choice in
+            guard let origin = choice.delivery else { return false }
+            return (try? self.cliDelivery.bind(surface: surface, session: choice.id, origin: origin)) != nil
+        }
+        if matches.count == 1 { bridge.select(matches[0].id) }
+    }
+    private func awaitCLIFooter() {
+        guard pendingCLISurface != nil else { return }
+        matchCapturedCLI()
+        guard cliTarget == nil, bridge.selected.isEmpty else { return }
+        cliBindingTask = Task { [weak self] in
+            for _ in 0..<40 {
+                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                guard let self, self.bridge.enabled, self.bridge.selected.isEmpty else { return }
+                self.matchCapturedCLI()
+            }
+        }
     }
     func connectCLI(releaseSelection: Bool = true) {
         guard !busy else { return }
-        retireConnectionRequest(); target = nil; hasTarget = false
+        retireConnectionRequest(); target = nil
+        if releaseSelection { cliTarget = nil; pendingCLISurface = nil }
+        hasTarget = cliTarget != nil
         if !bridge.enabled { bridge.start() }
         guard bridge.enabled else { report(bridge.status, error: true); return }
         if releaseSelection { bridge.clearSelection(); replies.status = "" }
@@ -320,6 +375,16 @@ final class TranslatorModel: ObservableObject {
             if connectionRequestID == id { connectionRequestID = nil; connectionTask = nil }
             refreshHealth()
         }
+    }
+    private func bindSelectedCLI() {
+        guard let surface = pendingCLISurface, let choice = bridge.choices.first(where: { $0.id == bridge.selected }),
+              let origin = choice.delivery else { return }
+        do {
+            cliTarget = try cliDelivery.bind(surface: surface, session: choice.id, origin: origin)
+            hasTarget = true; targetName = choice.name
+            replies.status = "正在读取所选 CLI 会话的正式回复…"
+            report("已连接 CLI 输入区；\(language.name)译文将自动填入原终端，回复和额度随当前会话读取。")
+        } catch { report("已连接只读来源，但输入位置尚未核对。请在该会话的空输入区按 ⌃⌥E；仍可翻译和复制。") }
     }
     func report(_ message: String, error: Bool = false) { status = message; isError = error }
     func saveSettings(key: String, replaceKey: Bool) throws {
@@ -347,9 +412,10 @@ final class TranslatorModel: ObservableObject {
         guard !busy else { return }
         do {
             let text = try InputPolicy.validated(input)
-            if insert && target == nil { throw BridgeError.message("请先点击目标聊天输入框，再按 ⌃⌥E；也可以先点「仅翻译」。") }
+            if insert && target == nil && cliTarget == nil { throw BridgeError.message("请先点击目标聊天输入框，再按 ⌃⌥E；也可以先点「仅翻译」。") }
+            if insert, let cliTarget { try cliDelivery.validate(cliTarget, requireEmpty: true, frontmost: false) }
             let destination = insert ? try target.map { try TargetBridge.refresh($0) } : target
-            let job = Job(id: UUID(), text: text, insert: insert, target: destination, send: autoSend, commandReturn: commandReturn, language: language)
+            let job = Job(id: UUID(), text: text, insert: insert, target: destination, send: autoSend, commandReturn: commandReturn, language: language, cli: cliTarget)
             let provider = RemoteTranslationProvider(rawValue: engine)
             guard engine == "apple" || provider != nil else { throw BridgeError.message("翻译方式无效，请重新选择。") }
             // Injected reads are local test callbacks. Real Keychain reads
@@ -436,6 +502,27 @@ final class TranslatorModel: ObservableObject {
             report("中文草稿在翻译期间已改变，旧译文已保留，未自动填入或发送。请重新翻译当前草稿。")
         } else if !review.isEmpty && !job.reviewApproved {
             report("译文需要核对（" + review.joined(separator: "；") + "），未自动填入或发送。确认后可点「填入译文」。")
+        } else if job.insert, let cli = job.cli {
+            report("翻译完成，正在核对原 CLI 输入区…")
+            let outcome = try await cliDelivery.deliver(translated, to: cli, autoSend: job.send) { [weak self] in
+                self?.activeID == job.id && self?.cliTarget?.id == cli.id && self?.bridge.selected == cli.session
+            }
+            guard activeID == job.id else { return }
+            switch outcome {
+            case .inserted:
+                report(job.send ? "已填入 CLI；多行内容请在终端核对后按回车发送。" : "已填入 CLI，由你确认后发送。")
+                if input == job.text { input = "" }
+            case .sendKeyPressed:
+                report("已填入 CLI 并按下回车，请以 Claude Code 显示为准。")
+                if input == job.text { input = "" }
+                revealWindow()
+            case .collapsed:
+                report("已尝试粘贴，CLI 折叠了长内容，无法核对全文；未自动回车。请在终端检查后手动发送，不要重复填入。")
+                revealWindow()
+            case .unconfirmed:
+                report("已尝试粘贴，但 CLI 未提供完整可核对的输入；未自动发送。请检查原输入区，译文已保留。", error: true)
+                revealWindow()
+            }
         } else if job.insert, let target = job.target {
             report("翻译完成，正在检查原输入框…")
             let outcome = try await TargetBridge.deliver(translated, to: target, autoSend: job.send,
@@ -498,12 +585,15 @@ final class TranslatorModel: ObservableObject {
     }
     func insertResult() {
         guard !busy, !output.isEmpty else { return }
-        guard let target else { report("请先回到目标输入框，再按 ⌃⌥E，然后点击「填入译文」。", error: true); return }
-        let refreshed: TargetBridge.Target
-        do { refreshed = try TargetBridge.refresh(target) }
+        guard target != nil || cliTarget != nil else { report("请先回到目标输入框，再按 ⌃⌥E，然后点击「填入译文」。", error: true); return }
+        let refreshed: TargetBridge.Target?
+        do {
+            if let cliTarget { try cliDelivery.validate(cliTarget, requireEmpty: true, frontmost: false) }
+            refreshed = try target.map { try TargetBridge.refresh($0) }
+        }
         catch { report(error.localizedDescription, error: true); return }
         guard input.isEmpty || input == outputSource else { report("中文草稿已改变，请重新翻译后再填入。", error: true); return }
-        let job = Job(id: UUID(), text: outputSource, insert: true, target: refreshed, send: autoSend, commandReturn: commandReturn, language: outputLanguage, reviewApproved: true)
+        let job = Job(id: UUID(), text: outputSource, insert: true, target: refreshed, send: autoSend, commandReturn: commandReturn, language: outputLanguage, cli: cliTarget, reviewApproved: true)
         let result = output
         activeID = job.id; busy = true
         task = Task {
@@ -531,6 +621,7 @@ final class TranslatorModel: ObservableObject {
         report("已取消。若已开始粘贴，请检查原输入框。")
     }
     func startReplyReading() {
+        if isCLIConnection { bridge.select(bridge.selected); return }
         guard !busy, let target else { report("请先点击 Claude 输入框，再按 ⌃⌥E。", error: true); return }
         Task { await replies.connect(target: target, engine: engine, baseURL: baseURL, model: activeAIModel, language: language) }
         announceEntrance(target)

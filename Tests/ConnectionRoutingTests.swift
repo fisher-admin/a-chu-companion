@@ -11,6 +11,7 @@ import ApplicationServices
         setvbuf(stdout, nil, _IONBF, 0); _ = NSApplication.shared
         let model = TranslatorModel(permissionCheck: { true }, remoteKeyRead: { _ in "synthetic-value" })
         model.cliEntryRequest = { _ in }
+        model.cliCapture = { throw BridgeError.message("Synthetic unavailable terminal surface") }
         defer { model.bridge.stop(); model.cancel(); model.stopPermissionMonitoring() }
         model.input = "保留草稿"; model.history = [.init(id: "retained", isUser: false, chinese: "保留译文", foreign: "Retained.")]
         model.bridge.start()

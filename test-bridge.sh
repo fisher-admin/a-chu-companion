@@ -8,4 +8,5 @@ swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" "${sources[@]}" T
 .build/bridge-socket-tests
 python3 -m unittest discover -s Tests -p BridgeTests.py
 python3 -m unittest discover -s Tests -p ActiveUsageTests.py
+python3 -m unittest discover -s Tests -p CLIDeliveryOriginTests.py
 node --test Tests/BridgeChromeTests.cjs Tests/BridgeWorkerTests.cjs Tests/WebUsageTests.cjs

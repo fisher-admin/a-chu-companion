@@ -1,6 +1,14 @@
 # A畜伴侣只读桥接 / Read-only bridge
 
-## build68：CLI 会话选择与复制译文
+## build69：CLI自动填入
+
+桥接传输仍然只读；自动输入由伴侣独立的本机窗口绑定完成。在已登录Claude Code的空输入区按实体 **Control＋Option＋E**，核对底部会话编号和20位「输入」标记。只在唯一匹配当前窗口、焦点、会话及存活前台CLI进程后启用自动填入；单独选择会话只开启读取和额度，不凭最新报告猜测发送目标。旧无输入标记报文保持只读。
+
+中文翻译后粘贴一次。短单行全文核对后，可按「填入后发送」偏好自动回车；多行、表格及折叠长文需在终端确认。切源、焦点变化、进程挂起/退出、取消或迟到结果停止后续按键，临时重绘在同一次粘贴后等待。不会写入TTY、发送socket控制命令或改变终端品牌设置。来源仅附加PID、TTY、启动时间和绑定标记，不附加进程参数、凭据或正文。[模拟结果与真实验收](../docs/testing/cli-automatic-input-2026-10-07.md)。
+
+English: The bridge transport remains read-only. A separate local GUI binding checks the original focused surface, current footer/session and live foreground CLI process before pasting once. Verified single-line receipt permits optional Return; multiline/table/collapsed pastes require terminal confirmation. Source/focus/process changes or cancellation stop further keys. Older reports remain read-only, and choosing a reply source alone does not authorize input. No TTY writes or socket control commands are introduced.
+
+## build68：CLI 会话选择与复制译文（历史）
 
 主界面点击「连接 CLI」，或在已登录的 Claude Code 终端按实体键盘 **Control＋Option＋E**，打开会话选择页。对照终端底部「A畜伴侣 CLI · 编号」选择同一编号；候选显示目录末级名、模型、最近接收报告时间及正文状态，不按终端品牌识别，也不自动猜选最新会话。不同会话分别保留；同一 session_id 切换工作目录保持同一连接。目录只传末级名，不传完整路径。
 
@@ -10,7 +18,7 @@
 
 English: Open **Connect CLI**, or press physical **Control+Option+E** in Claude Code, then match the companion's session identifier to the terminal footer. Directory basename, model, local report time and body status distinguish candidates without depending on terminal brand or automatically selecting one. A session keeps its identity across directory changes. Translate Chinese, click **Copy translation**, paste with **⌘V**, then confirm submission in the terminal. Completed outgoing history retains its own copy action. User status-line output and invalidated-account isolation are preserved. Status-line usage alone does not supply reply text; MessageDisplay support must be verified separately.
 
-下面保留历史版本的配置和验收记录；当前 CLI 界面操作以上述流程为准。[本次修复记录](../docs/testing/cli-workflow-repair-2026-10-07.md)。
+下面保留历史版本的配置和验收记录；当前CLI操作以build69流程为准。[build68修复记录](../docs/testing/cli-workflow-repair-2026-10-07.md)。
 
 ## build56：连接聊天时自动取得对应额度
 

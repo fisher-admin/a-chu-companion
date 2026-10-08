@@ -111,6 +111,7 @@ final class LocalBridge: @unchecked Sendable {
 
 struct BridgeChoice: Identifiable {
     let id: String
+    var delivery: CLIDeliveryOrigin? = nil
     var source: BridgeSourceDetails? = nil
     var reportedAt: Date? = nil
     var hasReplies = false
@@ -134,6 +135,7 @@ struct BridgeChoice: Identifiable {
     var onStop: () -> Void = {}
     var onTick: () -> Void = {}
     var onSelection: () -> Void = {}
+    var onCLIReport: () -> Void = {}
     var onSnapshot: (ReplySnapshot) -> Void = { _ in }
     var onUsageAccount: (UsageAccountObservation) -> Void = { _ in }
     var onUsage: (UsageEvidence) -> Void = { _ in }
@@ -175,6 +177,11 @@ struct BridgeChoice: Identifiable {
             let now = Date()
             received[update.binding] = now
             if let index = choices.firstIndex(where: { $0.id == update.binding }) {
+                // Every statusLine report is an origin observation. A missing
+                // origin revokes input capability without losing the reader.
+                if update.accountObservation != nil || update.evidence != nil {
+                    choices[index].delivery = update.delivery
+                }
                 choices[index].reportedAt = now
                 if let source = update.source {
                     let previous = choices[index].source
@@ -186,10 +193,11 @@ struct BridgeChoice: Identifiable {
             }
             if let observation = update.accountObservation { onUsageAccount(observation) }
             if let evidence = update.evidence { onUsage(evidence) }
+            if update.binding.hasPrefix("cli-") { onCLIReport() }
             if let snapshot = update.snapshot {
                 snapshots[update.binding] = snapshot; visible[update.binding] = update.visible; received[update.binding] = Date()
                 if selected == update.binding {
-                    status = "已绑定只读来源；输入仅翻译/复制，不模拟终端回车"
+                    status = "已绑定回复来源；输入位置由连接快捷键单独核对"
                     onSnapshot(snapshot)
                 }
             }
@@ -200,7 +208,7 @@ struct BridgeChoice: Identifiable {
         guard choices.contains(where: { $0.id == binding }) else { return }
         selected = binding; clock?.cancel(); onSelection()
         onUsageConnection(binding)
-        status = "已绑定只读来源；输入仅翻译/复制，不模拟终端回车"
+        status = "已绑定回复来源；输入位置由连接快捷键单独核对"
         if let snapshot = snapshots[binding] { onSnapshot(snapshot) }
         clock = Task { [weak self] in
             while !Task.isCancelled {

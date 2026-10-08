@@ -28,6 +28,7 @@ jobs:
       - name: Read-only bridge protocol and temporary installation checks
         run: |
           python3 -m unittest discover -s Tests -p BridgeTests.py
+          python3 -m unittest discover -s Tests -p CLIDeliveryOriginTests.py
           node --test Tests/BridgeChromeTests.cjs Tests/BridgeWorkerTests.cjs
       - name: Validate documentation and audit history
         run: python3 Tools/check_repository.py --history

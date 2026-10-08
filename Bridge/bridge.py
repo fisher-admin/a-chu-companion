@@ -14,6 +14,7 @@ import struct
 import subprocess
 import sys
 import uuid
+import re
 from pathlib import Path
 
 MAX_FRAME = 8 * 1024 * 1024
@@ -78,10 +79,50 @@ def source_summary(value):
         result['model'] = name
     return result
 
-def status_label(value):
+def process_snapshot(pid):
+    """Bounded local process metadata, never arguments or terminal contents."""
+    try:
+        result = subprocess.run(['/bin/ps', '-o', 'pid=,ppid=,pgid=,tpgid=,tty=,uid=,lstart=,comm=', '-p', str(pid)],
+                                capture_output=True, text=True, timeout=0.3, check=False)
+        if result.returncode != 0 or len(result.stdout) > 4096:
+            return None
+        parts = result.stdout.strip().split(None, 11)
+        if len(parts) != 12:
+            return None
+        return {'pid':int(parts[0]), 'parent':int(parts[1]), 'group':int(parts[2]), 'foreground':int(parts[3]),
+                'tty':parts[4], 'uid':int(parts[5]), 'started':' '.join(parts[6:11]), 'command':parts[11]}
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        return None
+
+def delivery_origin(value, reader=process_snapshot, parent=None, uid=None):
+    """Only a live local foreground Claude ancestor can bless a GUI footer."""
+    pid = os.getppid() if parent is None else parent
+    owner = os.getuid() if uid is None else uid
+    seen = set()
+    for _ in range(12):
+        if pid <= 1 or pid in seen:
+            return None
+        seen.add(pid)
+        item = reader(pid)
+        if not item or item.get('pid') != pid or item.get('uid') != owner:
+            return None
+        command = item.get('command', '')
+        if Path(command).name.lower() == 'claude' or '/claude/versions/' in command:
+            if not re.fullmatch(r'ttys[0-9]{1,6}', item.get('tty', '')) or item.get('group', 0) <= 0 or item.get('foreground') != item.get('group'):
+                return None
+            started = item.get('started', '')
+            if not isinstance(started, str) or len(started) > 32 or not started.strip():
+                return None
+            started = ' '.join(started.split())
+            digest = hashlib.sha256((binding(value) + '\0' + str(pid) + '\0' + started).encode()).hexdigest()[:20]
+            return {'pid':pid, 'tty':item['tty'], 'started':started, 'tag':digest}
+        pid = item.get('parent', 0)
+    return None
+
+def status_label(value, origin=None):
     summary = source_summary(value)
     workspace = summary.get('workspace')
-    return 'A畜伴侣 CLI · ' + binding(value)[-6:] + ((' · ' + workspace) if workspace else '')
+    return 'A畜伴侣 CLI · ' + binding(value)[-6:] + ((' · ' + workspace[:20]) if workspace else '') + ((' · 输入 ' + origin['tag']) if origin else '')
 
 def hook_envelope(value):
     for key in ('message_id', 'turn_id', 'delta'):
@@ -444,18 +485,25 @@ def main():
             pass
         # No replacement output: original CLI text and transcript stay intact.
     elif args.statusline:
+        origin = delivery_origin(value)
         try:
             context = CLIAccountTracker(args.state_dir).report(value) if args.state_dir else None
-            send(args.connection, status_envelope(value, context))
+            envelope = status_envelope(value, context)
+            if origin:
+                envelope['delivery'] = origin
+            send(args.connection, envelope)
         except (ValueError, OSError, KeyError):
             pass
-        print(status_label(value), flush=True)
         original = json.loads(args.original_status)
         if isinstance(original, dict) and isinstance(original.get('command'), str):
             try:
                 subprocess.run(original['command'], shell=True, input=data, timeout=1, check=False)
             except subprocess.TimeoutExpired:
                 pass
+            print('', flush=True)
+        # The binding footer must stay at the bottom, beneath optional user
+        # status output. Keep that output intact instead of parsing its prose.
+        print(status_label(value, origin), flush=True)
 
 if __name__ == '__main__':
     try:

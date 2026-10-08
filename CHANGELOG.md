@@ -4,6 +4,13 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-07 — build 69 — CLI自动填入修复
+
+- Bind CLI input separately from reply reading, checking the original window, current footer and process-bound marker; replies no longer clear the input target. / CLI输入与回复读取分别绑定，核对原窗口、当前会话页脚及进程标记，正文到达不再清除输入目标。
+- Paste once. Verified single-line receipt permits optional Return; multiline/table or collapsed pastes require terminal confirmation. Changed focus, session, process or cancellation stops further actions and preserves text. / 译文只粘贴一次；短单行完整核对后可自动回车，多行、表格及折叠长文需终端确认；焦点、来源、进程改变或取消时保留文本并停止后续按键。
+- Wait through temporary redraw without repeating paste; restore the previous clipboard only while this operation still owns it. Older reports remain read-only. / 临时重绘在同一次粘贴后等待核对，不重复粘贴；仅当剪贴板仍属本次操作时恢复原内容，旧报文保持只读。
+- Offline and native synthetic-window results are separate from pending real-terminal acceptance. Prior builds and failures remain. / 离线回归、原生模拟与待完成的真实终端验收分别记录，旧版本及失败证据完整保留。见[测试记录](docs/testing/cli-automatic-input-2026-10-07.md)。
+
 ## 1.1.8 — 2026-10-07 — build 68 — installed / CLI会话辨认与复制修复
 
 - Open an actionable CLI session picker from unverified/non-editable capture. Show bounded directory/model labels and local report times; match the terminal footer identifier explicitly without guessing a session or terminal brand. / 无法识别或捕获终端输入时打开可操作的会话选择页；显示目录末级名、模型、报告时间，按终端底部编号明确选择，不按终端品牌或最近来源猜选。
