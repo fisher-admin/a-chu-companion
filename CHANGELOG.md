@@ -4,6 +4,12 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-08 — build 76 — 网页Code会话地址与持续读取
+
+- Recognize the official Web Code homepage and `session_…` routes as Code transcripts, keeping polling active through the mode transition. Unrelated paths remain excluded. / 补齐官方网页Code首页和会话地址识别，切换模式时保持轮询；无关页面仍排除。
+- Preserve build75 `86a81ef`, including its live Desktop and Web Chat results and the Web Code failure that led to this repair. / 保留build75提交、桌面与网页Chat实际通过结果，以及网页Code停止读取的实际失败。
+- Add 15 Web Code checks covering navigation, malformed routes and localized tool-summary exclusion. Sending and quota source isolation are unchanged. / 新增15项网页Code检查，覆盖导航、错误地址与中文工具提示排除，保持发送规则和额度来源隔离。见[验收记录](docs/testing/web-code-navigation-2026-10-08.md)。
+
 ## 1.1.8 — 2026-10-08 — build 75 — 中文界面回复读取与网页额度诊断
 
 - Recognize English, Traditional Chinese and Simplified Chinese transcript, authorship, ordinal and completion metadata while preserving reply text. / 识别英文、繁体和简体中文的消息区、作者、序号及完成标记，保留回复原文。

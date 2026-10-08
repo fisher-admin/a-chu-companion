@@ -87,6 +87,18 @@ enum ClaudeConversationPage {
         guard let url = URL(string: address), url.scheme == "https", url.host == "claude.ai" else { return nil }
         let parts = url.path.split(separator: "/")
         if (1...2).contains(parts.count), parts[0] == "epitaxy" { return .code }
+        if parts.first == "code" {
+            // The official Web UI visits the homepage while opening a session.
+            // Recognize it too so polling survives the Chat -> Code navigation.
+            if parts.count == 1 { return .code }
+            if parts.count == 2, parts[1].hasPrefix("session_") {
+                let identifier = parts[1].dropFirst("session_".count)
+                if !identifier.isEmpty, identifier.unicodeScalars.allSatisfy({
+                    (48...57).contains($0.value) || (65...90).contains($0.value) ||
+                    (97...122).contains($0.value) || $0 == "_" || $0 == "-"
+                }) { return .code }
+            }
+        }
         if parts.count >= 2, parts[0] == "chat" { return .chat }
         return ["/", "", "/new"].contains(url.path) ? .chat : nil
     }
