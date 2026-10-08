@@ -9,10 +9,11 @@ import CryptoKit
     var footer = ""
     var collapsed = false
     var blankRows = 0
+    var suggestion = ""
     var checkpointURL: URL?
     var pasted = ""
     var pasteCount = 0, returnCount = 0
-    var base: String { "Claude Code synthetic surface\nPrevious synthetic answer.\n────────────────\n❯ \n────────────────\n" + footer + "\n? for shortcuts" + String(repeating:"\n    ",count:blankRows) }
+    var base: String { "Claude Code synthetic surface\nPrevious synthetic answer.\n────────────────\n❯ " + suggestion + "\n────────────────\n" + footer + "\n? for shortcuts" + String(repeating:"\n    ",count:blankRows) }
     func checkpoint() {
         guard let checkpointURL, let data=try? JSONSerialization.data(withJSONObject:["synthetic":true,"pasteCount":pasteCount,"returnCount":returnCount,"pastedCharacters":pasted.count],options:[.sortedKeys]) else{return}
         try? data.write(to:checkpointURL,options:.atomic)
@@ -21,7 +22,7 @@ import CryptoKit
     override func paste(_ sender: Any?) {
         pasteCount += 1; pasted = NSPasteboard.general.string(forType:.string) ?? ""
         let shown = collapsed ? "[Pasted text #1 +120 lines]" : pasted.replacingOccurrences(of:"\n",with:"\n  ")
-        string = base.replacingOccurrences(of:"❯ ",with:"❯ "+shown)
+        string = base.replacingOccurrences(of:"❯ "+suggestion,with:"❯ "+shown)
         checkpoint()
     }
     override func keyDown(with event:NSEvent) {
@@ -62,7 +63,7 @@ import CryptoKit
         env.activate={ [weak self] _ in NSApp.activate(ignoringOtherApps:true);self?.terminal.makeKeyAndOrderFront(nil);self?.terminal.makeFirstResponder(self?.screen) }
         model=TranslatorModel(permissionCheck:{true},remoteKeyRead:{_ in "synthetic-key"},cliDelivery:CLITargetBridge(environment:env))
         let root=Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        screen.checkpointURL=root.appendingPathComponent(".build/optimization70/native-events.json")
+        screen.checkpointURL=root.appendingPathComponent(".build/optimization71/native-events.json")
         model.cliEntryRequest={path in
             let code=try await Task.detached {
                 let p=Process();p.executableURL=URL(fileURLWithPath:"/usr/bin/python3");p.currentDirectoryURL=root;p.arguments=["Tests/CLIDeliveryClient.py",path]
@@ -81,13 +82,18 @@ import CryptoKit
                 Button("多行场景"){self.prepare("第一行。\n第二行。",foreign:"First line.\nSecond line.",collapsed:false)}
                 Button("折叠场景"){self.prepare(String(repeating:"长内容。",count:100),foreign:String(repeating:"Long text. ",count:100),collapsed:true)}
             }.padding(6)
+            Button("推荐提示场景"){
+                self.screen.footer=self.fullFooter;self.screen.suggestion="Try explaining this code";self.screen.blankRows=40
+                self.prepare("你好",foreign:"Hello.",collapsed:false);self.connect()
+            }.padding(.bottom,6)
             MainView(model:model,usage:usage)
         })
         terminal.makeKeyAndOrderFront(nil);panel.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true)
     }
-    @objc func showPanel(){panel.makeKeyAndOrderFront(nil)}
-    func prepare(_ chinese:String,foreign:String,collapsed:Bool){ screen.collapsed=collapsed;screen.reset();model.testTranslation={_ in foreign};model.input=chinese;panel.makeKeyAndOrderFront(nil) }
+    @objc func showPanel(){NSApp.activate(ignoringOtherApps:true);panel.makeKeyAndOrderFront(nil)}
+    func prepare(_ chinese:String,foreign:String,collapsed:Bool){ screen.collapsed=collapsed;screen.reset();model.testTranslation={_ in foreign};model.input=chinese;NSApp.activate(ignoringOtherApps:true);panel.makeKeyAndOrderFront(nil) }
     func connect(){
+        NSApp.activate(ignoringOtherApps:true)
         terminal.makeKeyAndOrderFront(nil);terminal.makeFirstResponder(screen)
         DispatchQueue.main.async { [weak self] in
             guard let self else{return}
@@ -100,7 +106,7 @@ import CryptoKit
         }
     }
     func connectWithDelayedFooter(){
-        model.bridge.stop();screen.footer="";screen.blankRows=40;screen.collapsed=false;screen.reset()
+        model.bridge.stop();screen.footer="";screen.suggestion="";screen.blankRows=40;screen.collapsed=false;screen.reset()
         model.testTranslation={_ in "Hello."};model.input="你好"
         connect()
         DispatchQueue.main.asyncAfter(deadline:.now()+0.8){ [weak self] in

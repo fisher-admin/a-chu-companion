@@ -4,6 +4,12 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-08 — build 71 — CLI推荐提示兼容
+
+- Accept rendered prompt suggestions during binding, translation preflight and paste instead of requiring an empty display. Let the normal CLI paste dismiss suggestions, then verify the exact translation before optional Return. / 连接、翻译和粘贴前不再要求显示内容为空；推荐文字由CLI正常输入消除，完整核对译文后才按设置回车。
+- Preserve repeated-fill protection using in-memory receipt digests; mixed or truncated input remains unsubmitted. / 通过本次运行中的接收摘要保留重复填入保护，混合或截断内容不自动发送。
+- 54 CLI input, 30 routing and 22 model checks passed. A native synthetic window with visible suggestions verified one paste and one Return. Preserve build70's user-reported failure and keep real-terminal acceptance separate. / 54项CLI输入、30项路由及22项翻译状态通过；原生模拟推荐文字下粘贴和回车均为1次。保留build70真实失败，终端验收另列。见[修订记录](docs/testing/cli-prompt-suggestions-2026-10-08.md)。
+
 ## 1.1.8 — 2026-10-08 — build 70 — CLI快捷键直接连接
 
 - Capture the active CLI text surface before configuring reports; verify the same window when the footer or process identity arrives later. The shortcut no longer opens a session picker. / 快捷键先保存当前CLI输入表面，再准备报告；页脚或进程身份迟到时仍核对同一窗口，不再弹出会话选择。

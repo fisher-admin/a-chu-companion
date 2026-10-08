@@ -265,7 +265,7 @@ final class TranslatorModel: ObservableObject {
                 targetName = replies.sourceName; report(replies.status)
                 bindSelectedCLI()
                 if !hasTarget {
-                    if cliConnectionHint.isEmpty { cliConnectionHint = "输入尚未连接：请在当前 CLI 空输入区按 ⌃⌥E，直接绑定窗口，无需选择会话。" }
+                    if cliConnectionHint.isEmpty { cliConnectionHint = "输入尚未连接：请在当前 CLI 输入区按 ⌃⌥E，直接绑定窗口，无需选择会话。" }
                     report(cliConnectionHint, error: cliCaptureFailed)
                 }
             }
@@ -379,7 +379,7 @@ final class TranslatorModel: ObservableObject {
             }
             guard let self, !self.hasTarget, self.pendingCLISurface != nil else { return }
             if self.cliConnectionHint.contains("正在核对") {
-                self.cliConnectionHint = "CLI 输入尚未绑定：没有核对到当前窗口的完整输入标记。请保持 CLI 空输入区可见，按 ⌃⌥E 直接连接；无需选择会话。"
+                self.cliConnectionHint = "CLI 输入尚未绑定：没有核对到当前窗口的完整输入标记。请保持 CLI 输入区可见，按 ⌃⌥E 直接连接；无需选择会话。"
             }
             self.report(self.cliConnectionHint, error: true)
         }
@@ -393,7 +393,7 @@ final class TranslatorModel: ObservableObject {
         guard bridge.enabled else { report(bridge.status, error: true); return }
         if releaseSelection { bridge.clearSelection(); replies.status = "" }
         showCLIPicker = showPicker
-        if cliTarget == nil && pendingCLISurface == nil { cliConnectionHint = "请在正在使用的 CLI 空输入区按 ⌃⌥E，直接连接当前窗口，无需选择会话。" }
+        if cliTarget == nil && pendingCLISurface == nil { cliConnectionHint = "请在正在使用的 CLI 输入区按 ⌃⌥E，直接连接当前窗口，无需选择会话。" }
         report("正在获取 Claude Code CLI 会话，请保持已登录的终端打开…")
         let id = UUID(), path = bridge.connectionPath
         connectionRequestID = id
@@ -452,7 +452,7 @@ final class TranslatorModel: ObservableObject {
         do {
             let text = try InputPolicy.validated(input)
             if insert && target == nil && cliTarget == nil { throw BridgeError.message("请先点击目标聊天输入框，再按 ⌃⌥E；也可以先点「仅翻译」。") }
-            if insert, let cliTarget { try cliDelivery.validate(cliTarget, requireEmpty: true, frontmost: false) }
+            if insert, let cliTarget { try cliDelivery.validate(cliTarget, frontmost: false) }
             let destination = insert ? try target.map { try TargetBridge.refresh($0) } : target
             let job = Job(id: UUID(), text: text, insert: insert, target: destination, send: autoSend, commandReturn: commandReturn, language: language, cli: cliTarget)
             let provider = RemoteTranslationProvider(rawValue: engine)
@@ -627,7 +627,7 @@ final class TranslatorModel: ObservableObject {
         guard target != nil || cliTarget != nil else { report("请先回到目标输入框，再按 ⌃⌥E，然后点击「填入译文」。", error: true); return }
         let refreshed: TargetBridge.Target?
         do {
-            if let cliTarget { try cliDelivery.validate(cliTarget, requireEmpty: true, frontmost: false) }
+            if let cliTarget { try cliDelivery.validate(cliTarget, frontmost: false) }
             refreshed = try target.map { try TargetBridge.refresh($0) }
         }
         catch { report(error.localizedDescription, error: true); return }

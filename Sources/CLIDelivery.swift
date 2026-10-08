@@ -145,6 +145,10 @@ enum CLIPromptPolicy {
         var board: NSPasteboard = .general
     }
     private let environment: Environment
+    private var pasteAttempt: (binding: UUID, translation: String, prompt: String)?
+    private static func fingerprint(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
     init(environment: Environment? = nil) { self.environment = environment ?? .init() }
     static func capture() throws -> Surface {
         guard TargetBridge.trusted, let app = NSWorkspace.shared.frontmostApplication,
@@ -211,16 +215,17 @@ enum CLIPromptPolicy {
     func bind(surface: Surface, session: String, origin: CLIDeliveryOrigin) throws -> Binding {
         guard origin.valid(for: session) else { throw BridgeError.message("CLI 输入标记不匹配，仍可只读和复制。") }
         let binding = Binding(session: session, origin: origin, surface: surface)
-        try validate(binding, requireEmpty: true, frontmost: false)
+        try validate(binding, frontmost: false)
         return binding
     }
-    func validate(_ binding: Binding, requireEmpty: Bool, frontmost: Bool) throws {
+    func validate(_ binding: Binding, frontmost: Bool) throws {
         try validateIdentity(binding, frontmost: frontmost)
         guard let screen = environment.screen(binding.surface) else { throw BridgeError.message("当前终端暂未提供输入区文字，尚未绑定自动填入。") }
-        guard let prompt = CLIPromptPolicy.prompt(screen: screen, binding: binding.session, origin: binding.origin) else {
+        guard CLIPromptPolicy.prompt(screen: screen, binding: binding.session, origin: binding.origin) != nil else {
             throw BridgeError.message("当前 CLI 输入区与底部输入标记尚未匹配" + CLIPromptPolicy.diagnostic(screen) + "。等待同一窗口刷新，无需选择会话。")
         }
-        guard !requireEmpty || prompt.isEmpty else { throw BridgeError.message("CLI 输入区已有文字，未覆盖草稿。请清空原输入区，再按 ⌃⌥E 连接。") }
+        // The rendered text can be a suggestion, not the editable draft.
+        // Let CLI's normal paste dismiss it; verify exact receipt afterward.
     }
     private func validateIdentity(_ binding: Binding, frontmost: Bool) throws {
         guard environment.trusted() else { throw BridgeError.message("辅助功能权限当前不可用，未自动填入 CLI。") }
@@ -234,7 +239,7 @@ enum CLIPromptPolicy {
             throw BridgeError.message("译文以 CLI 命令符号开头，未自动填入。请复制后在终端核对，避免改变输入模式。")
         }
         guard current(), environment.companionActive() else { throw BridgeError.message("连接或当前软件已改变，没有自动填入 CLI。译文已保留。") }
-        try validate(binding, requireEmpty: true, frontmost: false)
+        try validate(binding, frontmost: false)
         try Task.checkCancellation()
         environment.activate(binding.surface)
         for _ in 0..<16 {
@@ -242,7 +247,14 @@ enum CLIPromptPolicy {
             try await Task.sleep(for: .milliseconds(50))
         }
         guard current() else { throw BridgeError.message("CLI 来源已切换，未自动粘贴。") }
-        try validate(binding, requireEmpty: true, frontmost: true)
+        try validate(binding, frontmost: true)
+        let translationFingerprint = Self.fingerprint(text)
+        if let previous = pasteAttempt, previous.binding == binding.id, previous.translation == translationFingerprint,
+           let screen = environment.screen(binding.surface),
+           let prompt = CLIPromptPolicy.prompt(screen: screen, binding: binding.session, origin: binding.origin),
+           previous.prompt == Self.fingerprint(prompt.text) {
+            throw BridgeError.message("此译文已尝试填入，原 CLI 内容尚未改变；未重复粘贴。请在终端核对后发送。")
+        }
         let board = environment.board
         let previous = (board.pasteboardItems ?? []).map { item in item.types.compactMap { type in item.data(forType: type).map { (type, $0) } } }
         board.clearContents()
@@ -257,8 +269,9 @@ enum CLIPromptPolicy {
         }
         try Task.checkCancellation()
         guard current() else { throw BridgeError.message("CLI 连接已改变，未自动粘贴。") }
-        try validate(binding, requireEmpty: true, frontmost: true)
+        try validate(binding, frontmost: true)
         try environment.key(9, .maskCommand, binding.surface.app.processIdentifier)
+        pasteAttempt = nil
         var stable = 0
         for _ in 0..<40 {
             try await Task.sleep(for: .milliseconds(50))
@@ -267,6 +280,9 @@ enum CLIPromptPolicy {
             // Some native terminal redraws briefly remove the accessible text.
             // Wait inside the same receipt window, without another paste.
             guard let screen = environment.screen(binding.surface) else { stable = 0; continue }
+            if let prompt = CLIPromptPolicy.prompt(screen: screen, binding: binding.session, origin: binding.origin) {
+                pasteAttempt = (binding.id, translationFingerprint, Self.fingerprint(prompt.text))
+            }
             let receipt = CLIPromptPolicy.receipt(screen: screen, binding: binding.session, origin: binding.origin, text: text)
             if receipt == .collapsed { return .collapsed }
             stable = receipt == .confirmed ? stable + 1 : 0
@@ -274,7 +290,7 @@ enum CLIPromptPolicy {
             guard autoSend, CLIPromptPolicy.maySend(text, receipt: receipt) else { return .inserted }
             try Task.checkCancellation()
             guard current() else { throw BridgeError.message("CLI 来源已改变，没有自动发送。") }
-            try validate(binding, requireEmpty: false, frontmost: true)
+            try validate(binding, frontmost: true)
             guard let latest = environment.screen(binding.surface),
                   CLIPromptPolicy.receipt(screen: latest, binding: binding.session, origin: binding.origin, text: text) == .confirmed else { return .unconfirmed }
             try Task.checkCancellation()
@@ -282,6 +298,7 @@ enum CLIPromptPolicy {
                 throw BridgeError.message("CLI 在发送前发生变化，未按回车。请检查原输入区。")
             }
             try environment.key(36, [], binding.surface.app.processIdentifier)
+            pasteAttempt = nil
             return .sendKeyPressed
         }
         return .unconfirmed

@@ -67,7 +67,8 @@ import CryptoKit
         env.key = { key, _, _ in
             events.append(key)
             if key == 9 {
-                let inserted = pasteMode == "collapsed" ? "[Pasted text #1 +120 lines]" : board.string(forType:.string)!
+                let previousPrompt = CLIPromptPolicy.prompt(screen:screen,binding:binding,origin:verifiedOrigin)?.text ?? ""
+                let inserted = pasteMode == "collapsed" ? "[Pasted text #1 +120 lines]" : (pasteMode == "append" ? previousPrompt : "") + board.string(forType:.string)!
                 screen = verifiedEmpty.replacingOccurrences(of:"❯ ",with:"❯ "+inserted.replacingOccurrences(of:"\n",with:"\n  "))
                 if pasteMode == "redraw" { redrawReads = 2 }
                 if pasteMode == "exit" { live = false }
@@ -85,12 +86,18 @@ import CryptoKit
         screen=verifiedEmpty; events=[]
         let inserted = try await driver.deliver("Hello.",to:bound,autoSend:false,current:{current})
         check(inserted == .inserted && events == [9],"turning off automatic send still pastes once without Return")
+        events=[]
+        do { _ = try await driver.deliver("Hello.",to:bound,autoSend:false,current:{current});check(false,"repeated fill rejected") }
+        catch {check(events.isEmpty,"an unchanged received translation cannot be pasted a second time")}
         screen=verifiedEmpty; events=[]
         let multiple = try await driver.deliver("First line.\nSecond line.",to:bound,autoSend:true,current:{current})
         check(multiple == .inserted && events == [9],"multiline delivery is preserved without guessing Enter mode")
         screen=verifiedEmpty; events=[]; pasteMode="collapsed"
         let collapse = try await driver.deliver(String(repeating:"long ",count:300),to:bound,autoSend:true,current:{current})
         check(collapse == .collapsed && events == [9],"a collapsed long paste is never retried or automatically sent")
+        events=[]
+        do { _ = try await driver.deliver(String(repeating:"long ",count:300),to:bound,autoSend:true,current:{current});check(false,"repeated collapsed fill rejected") }
+        catch {check(events.isEmpty,"an unchanged collapsed paste cannot be inserted again by a later fill action")}
         screen=verifiedEmpty; events=[]; pasteMode="redraw"
         do {
             let redraw=try await driver.deliver("Hello.",to:bound,autoSend:true,current:{current})
@@ -104,11 +111,21 @@ import CryptoKit
         screen=verifiedEmpty; events=[]; pasteMode="plain"; live=true; focused=true; current=true; replaceBoard=true
         _ = try await driver.deliver("Hello.",to:bound,autoSend:false,current:{current})
         check(board.string(forType:.string)=="User's newer clipboard","a newer user clipboard is not overwritten by restoration")
-        screen=verifiedEmpty.replacingOccurrences(of:"❯ ",with:"❯ Existing draft"); events=[]; replaceBoard=false
-        do { _ = try await driver.deliver("Hello.",to:bound,autoSend:true,current:{current}); check(false,"nonempty draft rejected") }
-        catch { check(events.isEmpty,"existing CLI input blocks clipboard and keyboard operations") }
+        let suggestion=verifiedEmpty.replacingOccurrences(of:"❯ ",with:"❯ Try explaining this code")
+        screen=suggestion; events=[]; replaceBoard=false
+        do { _ = try driver.bind(surface:surface,session:binding,origin:verifiedOrigin);check(true,"visible CLI prompt suggestions do not prevent binding the verified input window") }
+        catch { check(false,"visible CLI prompt suggestions must not be mistaken for a blocking draft") }
+        do {
+            let result=try await driver.deliver("Hello.",to:bound,autoSend:true,current:{current})
+            check(result == .sendKeyPressed && events == [9,36],"a normal paste dismisses the visible suggestion and sends only the exact translation")
+        } catch {check(false,"visible suggested text must allow the normal CLI paste path")}
+        screen=verifiedEmpty.replacingOccurrences(of:"❯ ",with:"❯ Existing draft");events=[];pasteMode="append"
+        do {
+            let result=try await driver.deliver("Hello.",to:bound,autoSend:true,current:{current})
+            check(result == .unconfirmed && events == [9],"text appended to actual input is not retried or submitted as an exact translation")
+        } catch {check(false,"existing display text is allowed through paste and checked using actual receipt")}
 
-        screen=verifiedEmpty; events=[]; live=true; focused=true; current=true
+        screen=suggestion; events=[]; pasteMode="plain";live=true;focused=true;current=true
         let model = TranslatorModel(permissionCheck:{true},remoteKeyRead:{_ in "synthetic-value"},cliDelivery:driver)
         model.cliCapture = {surface}; model.cliEntryRequest = {_ in}
         defer { model.bridge.stop(); model.cancel(); model.stopPermissionMonitoring() }
@@ -127,8 +144,11 @@ import CryptoKit
         check(!model.showCLIPicker,"shortcut capture must wait for its current footer without asking the user to choose a CLI session")
         try await client()
         check(model.hasTarget && model.isCLIConnection && model.bridge.selected==binding,"shortcut surface pairs only the matching strong footer with its live CLI report")
+        check(model.hasTarget && model.cliConnectionHint.isEmpty,"suggestion text does not leave a stale nonempty-input error after shortcut binding")
+        if !model.hasTarget { screen=verifiedEmpty;model.connectCapturedTarget(captured) }
         try await client("delta")
         check(model.hasTarget && model.replies.watching,"incoming CLI reply snapshots keep the verified outgoing target")
+        screen=suggestion
         model.engine="gemini";model.language = .english; model.autoSend=true;model.testTranslation={_ in "Hello."};model.input="你好"
         model.begin(insert:true)
         let deadline=Date().addingTimeInterval(3)

@@ -84,7 +84,7 @@ struct MainView: View {
                                 Text("消息译成所选语言，回复自动译回中文。\n在这里写消息、看回复，继续同一个对话。")
                                     .font(.system(size: 13)).foregroundStyle(.secondary).lineSpacing(5)
                                 if model.isCLIConnection {
-                                    Label(model.hasTarget ? "译文自动填入原终端；多行或折叠长文需在终端确认发送" : "在终端空输入区按 ⌃⌥E 绑定自动填入；也可复制译文", systemImage: "terminal")
+                                    Label(model.hasTarget ? "译文自动填入原终端；多行或折叠长文需在终端确认发送" : "在终端输入区按 ⌃⌥E 绑定自动填入；也可复制译文", systemImage: "terminal")
                                         .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 4)
                                 } else if !model.hasTarget {
                                     Label("点击 Claude 输入框，再按 ⌃⌥E 连接", systemImage: "link")
@@ -147,7 +147,7 @@ struct MainView: View {
                                 .padding(.horizontal, 12).padding(.vertical, 12).allowsHitTesting(false)
                         }
                     }.frame(height: min(160, max(76, CGFloat(model.input.split(separator: "\n", omittingEmptySubsequences: false).count) * 20 + 24)))
-                    Text(model.isCLIConnection && !model.hasTarget ? "只读连接 · 在终端空输入区按 ⌃⌥E 可绑定自动填入" : "回车提交 · Shift + 回车换行")
+                    Text(model.isCLIConnection && !model.hasTarget ? "只读连接 · 在终端输入区按 ⌃⌥E 可绑定自动填入" : "回车提交 · Shift + 回车换行")
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }.padding(12)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
@@ -217,7 +217,7 @@ struct CLIConnectionPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("选择 Claude Code 会话").font(.title2.bold())
-            Text("自动填入请先在 Claude Code 的空输入区按 ⌃⌥E，核对底部输入标记。仅在此处选择来源可开启读取；报告时间不代表当前窗口。")
+            Text("自动填入请先在 Claude Code 的输入区按 ⌃⌥E，核对底部输入标记。仅在此处选择来源可开启读取；报告时间不代表当前窗口。")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
             ScrollView {
                 VStack(spacing: 10) {
