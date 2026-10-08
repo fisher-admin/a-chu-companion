@@ -96,7 +96,7 @@ final class FetchCounter: @unchecked Sendable {
         while plain.busy { try await Task.sleep(for: .milliseconds(5)) }
         check(noFallbackChinese.isEmpty && plain.hasFailures, "without a fallback the failed slice remains retryable and no Chinese is invented")
 
-        // Sending: a remote failure falls back to system translation for review only.
+        // Translation-only requests stay translation-only after remote failure.
         let saved = ["engine", "targetLanguage", "autoSend"].map { ($0, CompanionPreferences.store.object(forKey: $0)) }
         defer { for (key, value) in saved { CompanionPreferences.store.set(value, forKey: key) } }
         CompanionPreferences.store.set("en", forKey: "targetLanguage")
@@ -111,8 +111,8 @@ final class FetchCounter: @unchecked Sendable {
         while model.busy { try await Task.sleep(for: .milliseconds(5)) }
         check(model.output == english && systemCalls == 1 && model.input == question && model.history.last?.foreign == english,
               "an appended Gemini answer is replaced by the system translation while the Chinese draft stays")
-        check(model.status.contains("系统翻译") && model.status.contains("没有自动填入或发送") && model.status.contains("Gemini"),
-              "the fallback result is shown for review and explicitly not inserted or sent")
+        check(model.status.contains("系统翻译") && !model.status.contains("请检查后") && model.status.contains("Gemini"),
+              "translation-only fallback is reported without imposing an extra review step")
         model.testTranslation = { _ in throw BridgeError.message("Gemini 翻译服务返回 503。服务暂时不可用，请稍后重试。") }
         model.testFallback = { _ in throw BridgeError.message("系统翻译语言尚未准备好。") }
         model.input = "请保留原有设置。"

@@ -4,6 +4,14 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-08 — build 72 — 系统默认翻译与CLI提示
+
+- Default to system translation and retain the original input binding and fill/send choices after cloud failure, without a service-switch review step. / 系统翻译默认；云翻译失败后保留原输入绑定及填入／发送选择，不因切换翻译服务另设确认。
+- Give each outgoing system task its own view identity; equal-language retries and cloud fallback no longer depend on an old callback. / 系统翻译任务分别启动，同语言重试与备用翻译不再依赖旧任务回调。
+- Read more than twelve visual input rows, wrapped current markers and known CLI hints. Preserve exact content, process/focus checks and repeat-paste protection; unknown/collapsed receipt remains unsubmitted. / 修订视觉换行、标记换行和已知提示行识别，保留完整内容、进程焦点及重复粘贴核对，未知或折叠内容不自动回车。
+- Separately display and locally translate current CLI operational prompts. Keep choice keys/order and command details, reject menus as message composers, and retire stale translations when reading or source identity changes. / CLI运行、选择及权限提示先显示原文、稳定后独立本机翻译；保留选项编号和命令，不混入正式回复，也不代操作选项。
+- Preserve build71 `d106b52`, its installed backup and all earlier records. Verification, simulator-only boundaries and pending live-terminal acceptance are documented in the [build72 record](docs/testing/system-default-fallback-2026-10-08.md). / 保留build71提交、应用备份和历次记录；验证、模拟器边界及真实终端待确认项详见记录。
+
 ## 1.1.8 — 2026-10-08 — build 71 — CLI推荐提示兼容
 
 - Accept rendered prompt suggestions during binding, translation preflight and paste instead of requiring an empty display. Let the normal CLI paste dismiss suggestions, then verify the exact translation before optional Return. / 连接、翻译和粘贴前不再要求显示内容为空；推荐文字由CLI正常输入消除，完整核对译文后才按设置回车。

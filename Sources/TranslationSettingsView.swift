@@ -23,7 +23,7 @@ import SwiftUI
         VStack(alignment: .leading, spacing: 16) {
             Text("翻译设置").font(.title2.bold())
             Picker("翻译方式", selection: $engine) {
-                Text("系统翻译").tag("apple")
+                Text("系统翻译（默认）").tag("apple")
                 Text("AI 翻译").tag("ai")
                 Text("Gemini").tag("gemini")
             }.pickerStyle(.segmented)

@@ -4,16 +4,19 @@ import ApplicationServices
 import CryptoKit
 
 // Standalone, synthetic native surface. Never starts, controls or impersonates
-// a real terminal. Only this test injects process liveness; AX and keys are real.
+// a real terminal. AX, clipboard, Cocoa keyboard events and system translation
+// are real; process identity and cross-process event transport are synthetic.
 @MainActor final class SyntheticCLITextView: NSTextView {
     var footer = ""
     var collapsed = false
     var blankRows = 0
     var suggestion = ""
+    var wrapColumn = 0
+    var footerWrapped = false
     var checkpointURL: URL?
     var pasted = ""
     var pasteCount = 0, returnCount = 0
-    var base: String { "Claude Code synthetic surface\nPrevious synthetic answer.\n────────────────\n❯ " + suggestion + "\n────────────────\n" + footer + "\n? for shortcuts" + String(repeating:"\n    ",count:blankRows) }
+    var base: String { "Claude Code synthetic surface\nPrevious synthetic answer.\n────────────────\n❯ " + suggestion + "\n────────────────\n" + (footerWrapped ? footer.replacingOccurrences(of:" · 输入 ",with:" · 输\n入 ") : footer) + "\n? for shortcuts" + String(repeating:"\n    ",count:blankRows) }
     func checkpoint() {
         guard let checkpointURL, let data=try? JSONSerialization.data(withJSONObject:["synthetic":true,"pasteCount":pasteCount,"returnCount":returnCount,"pastedCharacters":pasted.count],options:[.sortedKeys]) else{return}
         try? data.write(to:checkpointURL,options:.atomic)
@@ -21,7 +24,11 @@ import CryptoKit
     func reset() { pasted="";pasteCount=0;returnCount=0;string=base;setSelectedRange(.init(location:0,length:0));checkpoint() }
     override func paste(_ sender: Any?) {
         pasteCount += 1; pasted = NSPasteboard.general.string(forType:.string) ?? ""
-        let shown = collapsed ? "[Pasted text #1 +120 lines]" : pasted.replacingOccurrences(of:"\n",with:"\n  ")
+        var shown = collapsed ? "[Pasted text #1 +120 lines]" : pasted.replacingOccurrences(of:"\n",with:"\n  ")
+        if wrapColumn > 0 && !collapsed {
+            let characters=Array(pasted)
+            shown=stride(from:0,to:characters.count,by:wrapColumn).map {String(characters[$0..<min(characters.count,$0+wrapColumn)])}.joined(separator:"\n  ")
+        }
         string = base.replacingOccurrences(of:"❯ "+suggestion,with:"❯ "+shown)
         checkpoint()
     }
@@ -56,14 +63,25 @@ import CryptoKit
         screen.footer="A畜伴侣 CLI · aaaaaa · Synthetic a · 输入 "+tag
         fullFooter=screen.footer
         screen.reset();scroll.documentView=screen;terminal.contentView=scroll
-        var env=CLITargetBridge.Environment();env.live={_ in true}
+        var env=CLITargetBridge.Environment();env.live={_ in true};env.trusted={true}
         env.focused={surface,front in front ? CLITargetBridge.focused(surface,true) : true}
         // In production this activates another app and restores its window.
         // The fixture has two windows in one app, so restore its saved window.
         env.activate={ [weak self] _ in NSApp.activate(ignoringOtherApps:true);self?.terminal.makeKeyAndOrderFront(nil);self?.terminal.makeFirstResponder(self?.screen) }
+        // Exercise native paste/Return handling only inside this test app.
+        // Posting cross-process CGEvents requires a separate TCC grant for a
+        // fixture identity; no extra user grant is needed for own Cocoa events.
+        env.key={ [weak self] key,flags,pid in
+            guard let self,pid==getpid(),[9,36].contains(key) else {throw BridgeError.message("模拟事件目标不是自身")}
+            let characters=key==9 ? "v":"\r"
+            guard let event=NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:flags.contains(.maskCommand) ? .command:[],timestamp:ProcessInfo.processInfo.systemUptime,windowNumber:self.terminal.windowNumber,context:nil,characters:characters,charactersIgnoringModifiers:characters,isARepeat:false,keyCode:key) else {throw BridgeError.message("模拟事件无法创建")}
+            NSApp.postEvent(event,atStart:false)
+        }
         model=TranslatorModel(permissionCheck:{true},remoteKeyRead:{_ in "synthetic-key"},cliDelivery:CLITargetBridge(environment:env))
         let root=Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        screen.checkpointURL=root.appendingPathComponent(".build/optimization71/native-events.json")
+        let results=root.appendingPathComponent(".build/cli-auto-input")
+        try? FileManager.default.createDirectory(at:results,withIntermediateDirectories:true)
+        screen.checkpointURL=results.appendingPathComponent("native-events.json")
         model.cliEntryRequest={path in
             let code=try await Task.detached {
                 let p=Process();p.executableURL=URL(fileURLWithPath:"/usr/bin/python3");p.currentDirectoryURL=root;p.arguments=["Tests/CLIDeliveryClient.py",path]
@@ -85,6 +103,30 @@ import CryptoKit
             Button("推荐提示场景"){
                 self.screen.footer=self.fullFooter;self.screen.suggestion="Try explaining this code";self.screen.blankRows=40
                 self.prepare("你好",foreign:"Hello.",collapsed:false);self.connect()
+            }.padding(.bottom,6)
+            HStack {
+                Button("系统自动发送场景") {
+                    self.model.cancel();self.model.engine="apple";self.model.testFallback=nil
+                    self.screen.suggestion="Try explaining this code"
+                    self.prepare("你好",foreign:"Hello.",collapsed:false);self.connect()
+                }
+                Button("Gemini失败备用发送场景") {
+                    self.model.cancel();self.model.engine="gemini";self.model.testFallback=nil
+                    self.screen.suggestion="Try explaining this code"
+                    self.prepare("你好",foreign:"Hello.",collapsed:false)
+                    self.model.testTranslation={_ in throw BridgeError.message("Gemini 模拟503。")};self.connect()
+                }
+            }.padding(.bottom,6)
+            HStack {
+                Button("窄终端换行场景") {
+                    self.terminal.setContentSize(.init(width:630,height:690))
+                    self.screen.wrapColumn=10;self.screen.footerWrapped=true
+                    self.prepare(String(repeating:"检验完整输入。",count:20),foreign:String(repeating:"abcdefghij",count:20)+"🙂",collapsed:false);self.connect()
+                }
+                Button("选择提示场景") {
+                    self.screen.string="Do you want to proceed?\n  python3 /synthetic/test.py\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No\nEnter to confirm · Esc to cancel"
+                }
+                Button("运行提示场景") {self.screen.string="✻ Thinking… (5s · ↓ 20 tokens)"}
             }.padding(.bottom,6)
             MainView(model:model,usage:usage)
         })

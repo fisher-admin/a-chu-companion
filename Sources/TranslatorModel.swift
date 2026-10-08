@@ -5,6 +5,7 @@ import Translation
 @MainActor
 final class TranslatorModel: ObservableObject {
     let replies = ReplyMonitor()
+    let cliNotices = CLINoticeMonitor()
     let health = HealthCenter()
     let bridge = BridgeCoordinator()
     var testTranslation: (@MainActor (String) async throws -> String)?
@@ -160,6 +161,7 @@ final class TranslatorModel: ObservableObject {
     @Published var hasTarget = false
     @Published private(set) var permission: Bool
     @Published var configuration: TranslationSession.Configuration?
+    @Published private(set) var systemTaskID: UUID?
     @Published var showSettings = false
     @Published var showCLIPicker = false
     @Published private(set) var cliConnectionHint = ""
@@ -212,7 +214,7 @@ final class TranslatorModel: ObservableObject {
         let language: TranslationLanguage
         var cli: CLITargetBridge.Binding? = nil
         /// Set when the system translation replaces a failed remote result.
-        /// Such a draft is only shown for review; it is never inserted or sent.
+        /// Retain the cause without changing the original delivery choices.
         var fallbackReason: String? = nil
         var reviewApproved = false
     }
@@ -249,6 +251,7 @@ final class TranslatorModel: ObservableObject {
         replies.onReplyState = { [weak self] id, complete in self?.markReply(id: id, complete: complete) }
         bridge.onStop = { [weak self] in
             guard let self else { return }
+            cliNotices.stop()
             replies.stop(); retireConnectionRequest(); cliTarget = nil; pendingCLISurface = nil
             cliConnectionHint = ""; cliCaptureFailed = false
             hasTarget = target != nil
@@ -256,6 +259,7 @@ final class TranslatorModel: ObservableObject {
         bridge.onTick = { [weak self] in self?.replies.tick() }
         bridge.onSelection = { [weak self] in
             guard let self else { return }
+            cliNotices.stop()
             retireConnectionRequest(); replies.stop(); target = nil; cliTarget = nil; hasTarget = false
             if !bridge.selected.isEmpty {
                 showCLIPicker = false
@@ -273,6 +277,7 @@ final class TranslatorModel: ObservableObject {
         bridge.onCLIReport = { [weak self] in
             guard let self else { return }
             if let bound = cliTarget, bridge.choices.first(where: { $0.id == bound.session })?.delivery != bound.origin {
+                cliNotices.stop()
                 cliTarget = nil; hasTarget = false
                 pendingCLISurface = nil
                 cliConnectionHint = "CLI 输入来源发生变化，自动填入已暂停。请在当前输入区按 ⌃⌥E 直接重新连接。"
@@ -419,6 +424,13 @@ final class TranslatorModel: ObservableObject {
         }
         do {
             cliTarget = try cliDelivery.bind(surface: surface, session: choice.id, origin: origin)
+            if let bound = cliTarget {
+                cliNotices.start(read: { [weak self] in
+                    self?.cliDelivery.passiveScreen(bound) ?? (nil, false)
+                }, current: { [weak self] in
+                    self?.cliTarget?.id == bound.id && self?.bridge.selected == bound.session && self?.replies.watching == true
+                })
+            }
             hasTarget = true; targetName = choice.name
             cliConnectionHint = ""; cliCaptureFailed = false
             replies.status = "正在读取所选 CLI 会话的正式回复…"
@@ -489,7 +501,7 @@ final class TranslatorModel: ObservableObject {
                                 return try await AITranslator.translate(request, provider: provider)
                             }
                         }
-                        // Translation failures may use a review-only fallback;
+                        // Translation failures may use the system fallback;
                         // delivery failures must retain this result and their own cause.
                         do { try await finish(result, job: job) }
                         catch { failed(error, id: job.id) }
@@ -504,14 +516,19 @@ final class TranslatorModel: ObservableObject {
                         self?.failed(TranslationChunkError.timedOut, id: job.id)
                     } catch { /* The system callback or cancellation ended this wait. */ }
                 }
-                if configuration == nil {
-                    configuration = .init(source: .init(identifier: "zh-Hans"), target: .init(identifier: job.language.rawValue))
-                } else { configuration?.invalidate() }
+                prepareSystemTask(job)
             }
         } catch { report(error.localizedDescription, error: true) }
     }
-    func runApple(_ session: TranslationSession) async {
-        guard let job = pending, activeID == job.id, busy else { return }
+    private func prepareSystemTask(_ job: Job) {
+        // Equal language configurations can be coalesced by SwiftUI when a
+        // cancelled task is immediately replaced. Key the view by this job,
+        // and reject callbacks from every earlier job explicitly.
+        systemTaskID = job.id
+        configuration = .init(source: .init(identifier: "zh-Hans"), target: .init(identifier: job.language.rawValue))
+    }
+    func runApple(_ session: TranslationSession, attempt: UUID) async {
+        guard let job = pending, activeID == job.id, busy, systemTaskID == attempt, job.id == attempt else { return }
         preparationWatchdog?.cancel(); preparationWatchdog = nil
         appleSession = session
         do {
@@ -559,7 +576,7 @@ final class TranslatorModel: ObservableObject {
                 report("已尝试粘贴，CLI 折叠了长内容，无法核对全文；未自动回车。请在终端检查后手动发送，不要重复填入。")
                 revealWindow()
             case .unconfirmed:
-                report("已尝试粘贴，但 CLI 未提供完整可核对的输入；未自动发送。请检查原输入区，译文已保留。", error: true)
+                report("已尝试粘贴，但" + cliDelivery.receiptHint + "；未自动发送。请检查原输入区，译文已保留。", error: true)
                 revealWindow()
             }
         } else if job.insert, let target = job.target {
@@ -589,18 +606,19 @@ final class TranslatorModel: ObservableObject {
             if case .unconfirmed = outcome {
                 // Keep the draft for a safe retry when the source cannot verify the paste.
             } else if input == job.text { input = "" }
-        } else if let reason = job.fallbackReason {
-            report("已改用系统翻译生成译文（" + reason + "）。请检查后点「填入译文」；没有自动填入或发送。")
         } else { report("翻译完成，可以检查或复制译文。") }
+        if let reason = job.fallbackReason {
+            report("已改用系统翻译（" + reason + "）。" + status, error: isError)
+        }
         busy = false; pending = nil; activeID = nil; appleSession = nil
+        systemTaskID = nil; configuration = nil
     }
     private func startSystemFallback(_ job: Job, reason: Error, provider: RemoteTranslationProvider) {
         let service = provider == .gemini ? "Gemini" : "AI 翻译服务"
-        let fallback = Job(id: job.id, text: job.text, insert: false, target: job.target, send: false,
-                       commandReturn: job.commandReturn, language: job.language,
-                       fallbackReason: service + "：" + reason.localizedDescription)
+        var fallback = job
+        fallback.fallbackReason = service + "：" + reason.localizedDescription
         pending = fallback
-        report(service + " 未能提供可用译文，正在改用系统翻译；完成后不会自动填入或发送。")
+        report(service + " 未能提供可用译文，正在改用系统翻译；完成后继续原操作。")
         if let testFallback {
             task = Task {
                 do {
@@ -618,9 +636,7 @@ final class TranslatorModel: ObservableObject {
                 self?.failed(TranslationChunkError.timedOut, id: job.id)
             } catch { /* The system callback or cancellation ended this wait. */ }
         }
-        if configuration == nil {
-            configuration = .init(source: .init(identifier: "zh-Hans"), target: .init(identifier: job.language.rawValue))
-        } else { configuration?.invalidate() }
+        prepareSystemTask(fallback)
     }
     func insertResult() {
         guard !busy, !output.isEmpty else { return }
@@ -646,6 +662,7 @@ final class TranslatorModel: ObservableObject {
         if #available(macOS 26.0, *) { appleSession?.cancel() }
         busy = false; pending = nil; activeID = nil; appleSession = nil
         configuration = nil
+        systemTaskID = nil
         if error is CancellationError { report("已取消，中文内容已保留。") }
         else {
             report(error.localizedDescription + (output.isEmpty ? "" : " 译文已保留，可复制使用。"), error: true)
@@ -656,7 +673,7 @@ final class TranslatorModel: ObservableObject {
         preparationWatchdog?.cancel(); preparationWatchdog = nil
         activeID = nil; pending = nil; task?.cancel(); task = nil
         if #available(macOS 26.0, *) { appleSession?.cancel() }
-        appleSession = nil; configuration = nil; busy = false
+        appleSession = nil; configuration = nil; systemTaskID = nil; busy = false
         report("已取消。若已开始粘贴，请检查原输入框。")
     }
     func startReplyReading() {

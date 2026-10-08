@@ -9,8 +9,11 @@ import AppKit
         CompanionPreferences.store.set("en", forKey: "targetLanguage")
         CompanionPreferences.store.removeObject(forKey: "replyTextSize")
         CompanionPreferences.store.removeObject(forKey: "geminiModel")
+        CompanionPreferences.store.removeObject(forKey: "engine")
         let model = TranslatorModel(permissionCheck: { true }, applePreparationTimeout: .milliseconds(20), remoteKeyRead: { _ in "" })
         defer { model.cancel(); model.stopPermissionMonitoring() }
+        precondition(model.engine == "apple")
+        print("PASS: first launch defaults to system translation without requiring a cloud key")
         precondition(model.geminiModel == "gemini-3.1-flash-lite")
         let oldService = (model.baseURL, model.aiModel)
         model.input = "保留这份配置草稿"
@@ -26,6 +29,11 @@ import AppKit
         precondition(!model.busy && model.isError && model.history.isEmpty && model.input == "保留这份配置草稿" && model.status.contains("Gemini"))
         print("PASS: missing Gemini key blocks translation before networking or delivery and preserves the draft")
         model.engine = "apple"
+        try model.saveSettings(key: "", replaceKey: false)
+        let restoredSystem = TranslatorModel(permissionCheck: { true }, remoteKeyRead: { _ in "" })
+        precondition(restoredSystem.engine == "apple" && restoredSystem.geminiModel == model.geminiModel)
+        restoredSystem.stopPermissionMonitoring()
+        print("PASS: choosing the system translator survives recreation while keeping the Gemini configuration")
         precondition(model.replyTextSize == .medium && model.replyTextSize.rawValue == 14)
         model.replyTextSize = .large
         model.engine = "apple"
@@ -43,14 +51,21 @@ import AppKit
         print("PASS: changing language clears stale output without capturing or sending")
         model.begin(insert: false)
         precondition(model.busy && model.history.last?.language == .german)
+        let firstSystemAttempt = model.systemTaskID
+        precondition(firstSystemAttempt != nil && model.configuration != nil)
+        print("PASS: each system translation exposes a job identity independent of an equal language configuration")
         try await waitUntil { !model.busy }
         precondition(!model.busy && model.isError && model.configuration == nil && model.input == "保留中文草稿")
+        precondition(model.systemTaskID == nil)
         print("PASS: a missing system translation callback ends waiting and preserves the draft")
         let rowsBeforeRetry = model.history.count
         model.begin(insert: false)
+        precondition(model.systemTaskID != nil && model.systemTaskID != firstSystemAttempt)
+        print("PASS: retrying the same language gets a new system task rather than reusing a retired callback")
         precondition(model.history.count == rowsBeforeRetry, "Retrying a failed translation must not duplicate the same unsent Chinese row")
         print("PASS: retrying the same failed draft replaces its unsent row without duplicating it")
         model.cancel()
+        precondition(model.systemTaskID == nil && model.configuration == nil)
         let status = model.status
         try await Task.sleep(for: .milliseconds(70))
         precondition(!model.busy && model.status == status)
@@ -136,7 +151,7 @@ import AppKit
         precondition(fresh.history.isEmpty && fresh.language == .german && fresh.replyTextSize == .large)
         fresh.stopPermissionMonitoring()
         print("PASS: a new application restores language and font size but has no persisted chat records")
-        print("22 multilingual model tests passed")
+        print("26 multilingual model tests passed")
     }
 
     @MainActor static func waitUntil(_ condition: () -> Bool) async throws {

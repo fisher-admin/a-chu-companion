@@ -61,49 +61,78 @@ enum CLIPromptPolicy {
         var text: String { lines.joined(separator: "\n") }
         var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
-    private static func terminalLines(_ screen: String) -> [String] {
+    static func terminalLines(_ screen: String) -> [String] {
         var lines = screen.suffix(32_768).components(separatedBy: .newlines)
-        // Native terminals can expose unused viewport rows after the TUI.
-        // Ignore only blank rows; a shell/menu remains a nonblank boundary.
         while lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeLast() }
         return Array(lines.suffix(200))
     }
+    struct Footer {
+        let lines: [String]
+        let start: Int
+        let end: Int
+    }
+    static func footer(screen: String, binding: String, origin: CLIDeliveryOrigin, requireInputHints: Bool = true) -> Footer? {
+        guard screen.utf16.count <= 500_000 else { return nil }
+        let lines = terminalLines(screen)
+        let prefix = "A畜伴侣 CLI · " + String(binding.suffix(6)) + " · "
+        // Join only contiguous footer fragments, preserving every character.
+        // Never hunt for the token in old scrollback or remove arbitrary text.
+        let markers = lines.indices.filter { lines[$0].trimmingCharacters(in: .whitespaces).hasPrefix("A畜伴侣 CLI · ") }
+        guard markers.count == 1, let start = markers.first else { return nil }
+        var joined = ""
+        for end in start..<min(lines.count, start + 4) {
+            joined += lines[end].trimmingCharacters(in: .whitespaces)
+            if joined.hasPrefix(prefix), joined.hasSuffix(" · 输入 " + origin.tag) {
+                let following = lines.suffix(from: end + 1).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                if requireInputHints && !(following.count <= 3 && following.allSatisfy(isHint)) { return nil }
+                return .init(lines: lines, start: start, end: end)
+            }
+        }
+        return nil
+    }
+    private static func isHint(_ line: String) -> Bool {
+        line == "? for shortcuts" || line == "-- INSERT --" ||
+        line.range(of: #"^(?:⏵{1,2} .+ \(shift\+tab to cycle\)|shift\+tab to cycle|ctrl\+g to edit in (?:editor|.+))$"#, options: .regularExpression) != nil
+    }
     static func diagnostic(_ screen: String) -> String {
-        let tail = Array(terminalLines(screen).suffix(12))
+        let tail = terminalLines(screen)
         let footerCount = tail.filter { $0.contains("A畜伴侣 CLI · ") }.count
         let inputCount = tail.filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("❯") }.count
         return "（末尾标记 \(footerCount)，输入标识 \(inputCount)）"
     }
     static func prompt(screen: String, binding: String, origin: CLIDeliveryOrigin) -> Prompt? {
-        guard screen.utf16.count <= 500_000 else { return nil }
-        // A suffix only; a tag elsewhere in scrollback never selects a pane.
-        let lines = terminalLines(screen)
-        let tail = Array(lines.suffix(12))
-        let footerPrefix = "A畜伴侣 CLI · " + String(binding.suffix(6))
-        let matching = tail.indices.filter {
-            let line = tail[$0].trimmingCharacters(in: .whitespaces)
-            return line.hasPrefix(footerPrefix + " · ") && line.hasSuffix(" · 输入 " + origin.tag)
-        }
-        guard matching.count == 1, let footer = matching.first,
-              !tail.joined(separator: "\n").contains("-- NORMAL --") else { return nil }
-        let following = tail.suffix(from: footer + 1).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        guard following.count <= 3, following.allSatisfy({ line in
-            line == "? for shortcuts" || line.hasPrefix("⏵") || line.hasPrefix("shift+tab") || line == "-- INSERT --"
-        }) else { return nil }
-        let prompts = tail.prefix(footer).indices.filter { tail[$0].trimmingCharacters(in: .whitespaces).hasPrefix("❯") }
+        guard let footer = footer(screen: screen, binding: binding, origin: origin),
+              !footer.lines.joined(separator: "\n").contains("-- NORMAL --"),
+              CLIInteractionPolicy.notice(screen: screen) == nil else { return nil }
+        let tail = footer.lines
+        var end = footer.start
+        if end > 0, separator(tail[end - 1]) { end -= 1 }
+        guard let latest = tail.prefix(end).lastIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("❯") }) else { return nil }
+        let boundary = tail.prefix(latest).lastIndex(where: separator).map { $0 + 1 } ?? 0
+        let prompts = (boundary..<end).filter { tail[$0].trimmingCharacters(in: .whitespaces).hasPrefix("❯") }
         guard prompts.count == 1, let start = prompts.first else { return nil }
-        let first = tail[start].trimmingCharacters(in: .whitespaces)
+        // Preserve payload trailing whitespace. Only the known prompt gutter
+        // may be removed; receipt comparison does not trim or normalize text.
+        let first = String(tail[start].drop(while: { $0 == " " }))
         var draft = String(first.dropFirst())
         if draft.hasPrefix(" ") { draft.removeFirst() }
         var body = [draft]
-        for line in tail[(start + 1)..<footer] {
-            let stripped = line.trimmingCharacters(in: .whitespaces)
-            if !stripped.isEmpty && stripped.allSatisfy({ "─━═".contains($0) }) { break }
-            // Continuation gutter belongs to the TUI, not to the translated text.
+        for line in tail[(start + 1)..<end] {
             body.append(line.hasPrefix("  ") ? String(line.dropFirst(2)) : line)
         }
         while body.count > 1 && body.last?.isEmpty == true { body.removeLast() }
         return .init(lines: body)
+    }
+    private static func separator(_ line: String) -> Bool {
+        let stripped = line.trimmingCharacters(in: .whitespaces)
+        return stripped.count >= 3 && stripped.allSatisfy { "─━═".contains($0) }
+    }
+    static func failureHint(screen: String?, binding: String, origin: CLIDeliveryOrigin) -> String {
+        guard let screen else { return "终端暂未提供文字" }
+        if CLIInteractionPolicy.notice(screen: screen) != nil { return "CLI 正在显示运行或选择提示" }
+        guard footer(screen: screen, binding: binding, origin: origin) != nil else { return "底部会话标记或提示行未匹配" }
+        guard prompt(screen: screen, binding: binding, origin: origin) != nil else { return "输入布局或输入标识未匹配" }
+        return "输入全文与译文不一致"
     }
     static func receipt(screen: String, binding: String, origin: CLIDeliveryOrigin, text: String) -> Receipt {
         guard let prompt = prompt(screen: screen, binding: binding, origin: origin) else { return .mismatch }
@@ -145,6 +174,7 @@ enum CLIPromptPolicy {
         var board: NSPasteboard = .general
     }
     private let environment: Environment
+    private(set) var receiptHint = ""
     private var pasteAttempt: (binding: UUID, translation: String, prompt: String)?
     private static func fingerprint(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -227,6 +257,13 @@ enum CLIPromptPolicy {
         // The rendered text can be a suggestion, not the editable draft.
         // Let CLI's normal paste dismiss it; verify exact receipt afterward.
     }
+    func passiveScreen(_ binding: Binding) -> (String?, Bool) {
+        // No activation, paste, key, or search outside the bound surface.
+        guard (try? validateIdentity(binding, frontmost: false)) != nil,
+              let screen = environment.screen(binding.surface) else { return (nil, false) }
+        let matched = CLIPromptPolicy.footer(screen: screen, binding: binding.session, origin: binding.origin, requireInputHints: false) != nil
+        return (screen, matched)
+    }
     private func validateIdentity(_ binding: Binding, frontmost: Bool) throws {
         guard environment.trusted() else { throw BridgeError.message("辅助功能权限当前不可用，未自动填入 CLI。") }
         guard environment.alive(binding.surface) else { throw BridgeError.message("原终端已关闭，未自动填入 CLI。") }
@@ -234,6 +271,7 @@ enum CLIPromptPolicy {
         guard environment.live(binding.origin) else { throw BridgeError.message("CLI 原进程已退出、挂起或改变，未自动发送。译文已保留。") }
     }
     func deliver(_ text: String, to binding: Binding, autoSend: Bool, current: () -> Bool) async throws -> Outcome {
+        receiptHint = ""
         let beginning = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !beginning.hasPrefix("!"), !beginning.hasPrefix("/") else {
             throw BridgeError.message("译文以 CLI 命令符号开头，未自动填入。请复制后在终端核对，避免改变输入模式。")
@@ -279,7 +317,8 @@ enum CLIPromptPolicy {
             try validateIdentity(binding, frontmost: true)
             // Some native terminal redraws briefly remove the accessible text.
             // Wait inside the same receipt window, without another paste.
-            guard let screen = environment.screen(binding.surface) else { stable = 0; continue }
+            guard let screen = environment.screen(binding.surface) else { receiptHint = "终端暂未提供文字"; stable = 0; continue }
+            receiptHint = CLIPromptPolicy.failureHint(screen: screen, binding: binding.session, origin: binding.origin)
             if let prompt = CLIPromptPolicy.prompt(screen: screen, binding: binding.session, origin: binding.origin) {
                 pasteAttempt = (binding.id, translationFingerprint, Self.fingerprint(prompt.text))
             }

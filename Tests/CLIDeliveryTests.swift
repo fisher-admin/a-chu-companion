@@ -24,6 +24,25 @@ import CryptoKit
         let pasted = empty.replacingOccurrences(of:"❯ ",with:"❯ Hello.")
         check(CLIPromptPolicy.receipt(screen:pasted,binding:binding,origin:origin,text:"Hello.") == .confirmed, "short pasted text is verified before sending")
         check(CLIPromptPolicy.receipt(screen:pasted+blankRows,binding:binding,origin:origin,text:"Hello.") == .confirmed,"a padded native terminal still verifies exact pasted text")
+        let longSingle = String(repeating:"abcdefghij",count:20) + "🙂"
+        let visualRows = stride(from:0,to:longSingle.count,by:10).map { offset in
+            let start=longSingle.index(longSingle.startIndex,offsetBy:offset)
+            let end=longSingle.index(start,offsetBy:10,limitedBy:longSingle.endIndex) ?? longSingle.endIndex
+            return String(longSingle[start..<end])
+        }
+        let tallInput = empty.replacingOccurrences(of:"❯ ",with:"❯ "+visualRows.joined(separator:"\n  "))
+        check(CLIPromptPolicy.receipt(screen:tallInput,binding:binding,origin:origin,text:longSingle) == .confirmed,"single-line soft wrapping beyond twelve display rows retains an exact receipt")
+        let wrappedFooter = pasted.replacingOccurrences(of:footer,with:"A畜伴侣 CLI · aaaaaa · project · 输\n入 abcdef123456abcdef12")
+        check(CLIPromptPolicy.receipt(screen:wrappedFooter,binding:binding,origin:origin,text:"Hello.") == .confirmed,"a narrowly wrapped current footer keeps the original session and process identity")
+        let spaced = empty.replacingOccurrences(of:"❯ ",with:"❯ Hello. ")
+        check(CLIPromptPolicy.receipt(screen:spaced,binding:binding,origin:origin,text:"Hello.") == .mismatch,"a genuine extra trailing draft space is never erased to manufacture a receipt")
+        let selection = "Do you want to proceed?\n❯ 1. Yes\n  2. No\n"+footer+"\nEnter to confirm · Esc to cancel"
+        check(CLIPromptPolicy.prompt(screen:selection,binding:binding,origin:origin)==nil,"a numbered choice cursor is not a Claude message composer")
+        check(CLIPromptPolicy.receipt(screen:pasted+"\nctrl+g to edit in editor",binding:binding,origin:origin,text:"Hello.") == .confirmed,"a recognized CLI editor hint does not block exact input verification")
+        check(CLIPromptPolicy.receipt(screen:pasted+"\nctrl+g to execute unknown command",binding:binding,origin:origin,text:"Hello.") == .mismatch,"unknown text after the footer remains a boundary")
+        check(CLIPromptPolicy.receipt(screen:"❯ Previous user question\nPrevious answer\n"+pasted,binding:binding,origin:origin,text:"Hello.") == .confirmed,"old question prompts above the current composer separator do not invalidate its receipt")
+        let literalBorder = empty.replacingOccurrences(of:"❯ ",with:"❯ Keep this border\n  ───")
+        check(CLIPromptPolicy.receipt(screen:literalBorder,binding:binding,origin:origin,text:"Keep this border\n───") == .confirmed,"literal border characters inside the payload survive input parsing")
         let multiline = empty.replacingOccurrences(of:"❯ ",with:"❯ First line.\n  Second line.")
         check(CLIPromptPolicy.receipt(screen:multiline,binding:binding,origin:origin,text:"First line.\nSecond line.") == .confirmed, "multiline text is compared without visual continuation indentation")
         let table = "| A | B |\n|---|---|\n| 1 | 2 |"
@@ -155,6 +174,47 @@ import CryptoKit
         while model.busy && Date()<deadline { try await Task.sleep(for:.milliseconds(10)) }
         check(!model.busy && model.output=="Hello." && events==[9,36],"Chinese input follows translation through the actual CLI delivery controller")
         check(model.input.isEmpty && model.hasTarget,"successful sending clears the Chinese draft while retaining the CLI binding")
+        model.testTranslation={_ in throw BridgeError.message("Gemini 翻译服务返回 503。")}
+        var fallbackCalls=0
+        model.testFallback={_ in fallbackCalls += 1; return "Hello."}
+        screen=verifiedEmpty;events=[];model.input="你好";model.begin(insert:true)
+        while model.busy {try await Task.sleep(for:.milliseconds(5))}
+        check(events==[9,36] && model.input.isEmpty && model.hasTarget && fallbackCalls==1,"Gemini failure preserves the CLI target and automatically pastes and sends the system translation")
+        check(model.status.contains("系统翻译") && model.status.contains("Gemini") && model.status.contains("503") && !model.status.contains("请检查后"),"automatic system fallback retains the remote error without requiring an extra review click")
+        screen=verifiedEmpty;events=[];model.autoSend=false;model.input="你好";model.begin(insert:true)
+        while model.busy {try await Task.sleep(for:.milliseconds(5))}
+        check(events==[9] && model.input.isEmpty,"system fallback preserves disabled automatic sending and still fills the CLI input")
+        screen=verifiedEmpty;events=[];model.autoSend=true;model.input="你好";model.begin(insert:false)
+        while model.busy {try await Task.sleep(for:.milliseconds(5))}
+        check(events.isEmpty && model.input=="你好" && model.output=="Hello." && !model.status.contains("请检查后"),"translation-only fallback never inserts or sends despite automatic sending being selected")
+        var waitingFallback:CheckedContinuation<String,Error>?
+        model.testFallback={_ in try await withCheckedThrowingContinuation {waitingFallback=$0}}
+        screen=verifiedEmpty;events=[];model.input="你好";model.begin(insert:true)
+        while waitingFallback==nil {try await Task.sleep(for:.milliseconds(5))}
+        model.input="保留新草稿";waitingFallback?.resume(returning:"Hello.");waitingFallback=nil
+        while model.busy {try await Task.sleep(for:.milliseconds(5))}
+        check(events.isEmpty && model.input=="保留新草稿" && model.output=="Hello.","a draft edited during the system fallback is never replaced or sent")
+        model.input="你好";model.begin(insert:true)
+        while waitingFallback==nil {try await Task.sleep(for:.milliseconds(5))}
+        model.cancel();waitingFallback?.resume(returning:"Hello.");waitingFallback=nil
+        try await Task.sleep(for:.milliseconds(30))
+        check(events.isEmpty && model.input=="你好" && !model.busy,"cancelling a system fallback retires the late result before paste or Return")
+        model.testFallback={_ in throw BridgeError.message("系统翻译暂不可用。")}
+        model.input="你好";model.begin(insert:true)
+        while model.busy {try await Task.sleep(for:.milliseconds(5))}
+        check(events.isEmpty && model.input=="你好" && model.isError && model.output.isEmpty,"both translation services failing preserves the draft without any terminal input")
+        let beforeDeliveryFailure=fallbackCalls
+        model.testFallback={_ in fallbackCalls += 1; focused=false;return "Hello."}
+        screen=verifiedEmpty;events=[];model.input="你好";model.begin(insert:true)
+        while model.busy {try await Task.sleep(for:.milliseconds(5))}
+        check(events.isEmpty && model.output=="Hello." && model.input=="你好" && model.isError && fallbackCalls==beforeDeliveryFailure+1,"focus lost after system translation retains the candidate without repeating translation or terminal input")
+        focused=true;model.testFallback={_ in "Hello. 123"};model.input="你好";model.begin(insert:true)
+        while model.busy {try await Task.sleep(for:.milliseconds(5))}
+        check(events.isEmpty && model.output.isEmpty && model.input=="你好" && model.isError,"system fallback still rejects invented numbers before delivery")
+        model.testFallback={_ in "Hello."};screen=verifiedEmpty;events=[];live=false;model.input="你好"
+        model.begin(insert:true)
+        check(events.isEmpty && model.input=="你好" && !model.busy,"an expired CLI input binding still refuses automatic fallback delivery")
+        live=true;model.testFallback=nil
         screen=verifiedEmpty; events=[]
         var delayed:CheckedContinuation<String,Error>?
         model.testTranslation={_ in try await withCheckedThrowingContinuation {delayed=$0} };model.input="你好";model.begin(insert:true)

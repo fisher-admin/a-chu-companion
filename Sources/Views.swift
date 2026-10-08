@@ -5,8 +5,9 @@ struct MainView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @ObservedObject var model: TranslatorModel
     @ObservedObject var replies: ReplyMonitor
+    @ObservedObject var cliNotices: CLINoticeMonitor
     @ObservedObject var usage: ClaudeUsageMonitor
-    init(model: TranslatorModel, usage: ClaudeUsageMonitor) { self.model = model; self.replies = model.replies; self.usage = usage }
+    init(model: TranslatorModel, usage: ClaudeUsageMonitor) { self.model = model; self.replies = model.replies; self.cliNotices = model.cliNotices; self.usage = usage }
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -97,7 +98,7 @@ struct MainView: View {
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(.leading, 18).padding(.trailing, 8).padding(.vertical, 12)
-                }.frame(minHeight: 180).scrollIndicators(.visible)
+                }.frame(minHeight: cliNotices.notice == nil ? 180 : 80).scrollIndicators(.visible)
                     .onScrollPhaseChange { _, phase in
                         if phase == .interacting || phase == .tracking { model.readingHistory = true }
                     }
@@ -112,6 +113,7 @@ struct MainView: View {
             }
             Divider()
             VStack(alignment: .leading, spacing: 8) {
+                CLINoticeView(monitor: model.cliNotices, fontSize: model.replyTextSize.points)
                 if !replies.status.isEmpty && (model.hasTarget || replies.watching || !model.history.isEmpty) {
                     HStack(alignment: .top, spacing: 7) {
                         if replies.translating { ProgressView().controlSize(.small) }
@@ -188,7 +190,13 @@ struct MainView: View {
                 if reduceTransparency { Color(nsColor: .windowBackgroundColor).ignoresSafeArea() }
                 else { GlassBackground().ignoresSafeArea() }
             }
-            .translationTask(model.configuration) { session in await model.runApple(session) }
+            .background {
+                if let attempt = model.systemTaskID, let configuration = model.configuration {
+                    Color.clear.frame(width: 0, height: 0)
+                        .translationTask(configuration) { session in await model.runApple(session, attempt: attempt) }
+                        .id(attempt)
+                }
+            }
             .background {
                 if let attempt = replies.systemTaskID, let configuration = replies.reverseConfiguration {
                     Color.clear.frame(width: 0, height: 0)
