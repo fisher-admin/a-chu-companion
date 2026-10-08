@@ -5,7 +5,7 @@ import CryptoKit
 
 // Standalone, synthetic native surface. Never starts, controls or impersonates
 // a real terminal. AX, clipboard, Cocoa keyboard events and system translation
-// are real; process identity and cross-process event transport are synthetic.
+// are real; process/focus identity and cross-process transport are synthetic.
 @MainActor final class SyntheticCLITextView: NSTextView {
     var footer = ""
     var collapsed = false
@@ -13,10 +13,11 @@ import CryptoKit
     var suggestion = ""
     var wrapColumn = 0
     var footerWrapped = false
+    var inputHint = "? for shortcuts"
     var checkpointURL: URL?
     var pasted = ""
     var pasteCount = 0, returnCount = 0
-    var base: String { "Claude Code synthetic surface\nPrevious synthetic answer.\n────────────────\n❯ " + suggestion + "\n────────────────\n" + (footerWrapped ? footer.replacingOccurrences(of:" · 输入 ",with:" · 输\n入 ") : footer) + "\n? for shortcuts" + String(repeating:"\n    ",count:blankRows) }
+    var base: String { "Claude Code synthetic surface\nPrevious synthetic answer.\n────────────────\n❯ " + suggestion + "\n────────────────\n" + (footerWrapped ? footer.replacingOccurrences(of:" · 输入 ",with:" · 输\n入 ") : footer) + "\n" + inputHint + String(repeating:"\n    ",count:blankRows) }
     func checkpoint() {
         guard let checkpointURL, let data=try? JSONSerialization.data(withJSONObject:["synthetic":true,"pasteCount":pasteCount,"returnCount":returnCount,"pastedCharacters":pasted.count],options:[.sortedKeys]) else{return}
         try? data.write(to:checkpointURL,options:.atomic)
@@ -64,7 +65,11 @@ import CryptoKit
         fullFooter=screen.footer
         screen.reset();scroll.documentView=screen;terminal.contentView=scroll
         var env=CLITargetBridge.Environment();env.live={_ in true};env.trusted={true}
-        env.focused={surface,front in front ? CLITargetBridge.focused(surface,true) : true}
+        // UI automation does not make this test app the system frontmost app.
+        // Model that boundary explicitly; all events still target this PID.
+        // Production focus/foreground guards are exercised by delivery tests.
+        env.companionActive={true}
+        env.focused={surface,_ in surface.app.processIdentifier == getpid()}
         // In production this activates another app and restores its window.
         // The fixture has two windows in one app, so restore its saved window.
         env.activate={ [weak self] _ in NSApp.activate(ignoringOtherApps:true);self?.terminal.makeKeyAndOrderFront(nil);self?.terminal.makeFirstResponder(self?.screen) }
@@ -127,6 +132,11 @@ import CryptoKit
                     self.screen.string="Do you want to proceed?\n  python3 /synthetic/test.py\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No\nEnter to confirm · Esc to cancel"
                 }
                 Button("运行提示场景") {self.screen.string="✻ Thinking… (5s · ↓ 20 tokens)"}
+                Button("截图中的CLI布局") {
+                    self.screen.inputHint="⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
+                    self.screen.suggestion="Try create a utility script"
+                    self.prepare("你好",foreign:"Hello.",collapsed:false);self.connect()
+                }
             }.padding(.bottom,6)
             MainView(model:model,usage:usage)
         })

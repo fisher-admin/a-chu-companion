@@ -16,6 +16,9 @@ import AppKit
         check(parsed != nil && parsed?.identity == CLIInteractionPolicy.notice(screen:cursorMoved)?.identity,"moving the selection cursor does not create another translation job")
         let modelMenu="Select model\n❯ 1. Default\n  2. Sonnet\n  3. Opus\nEnter to confirm · Esc to cancel"
         check(CLIInteractionPolicy.notice(screen:modelMenu)?.kind == .selection,"model selectors are read independently of font and terminal brand")
+        let combinedHint="⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
+        check(CLIInteractionPolicy.notice(screen:menu+"\n"+marker+"\n"+combinedHint)?.kind == .permission,"known combined input hints do not hide a permission menu")
+        check(CLIInteractionPolicy.notice(screen:spinnerWithHint(combinedHint))?.kind == .status,"known combined hints do not hide a running notice")
         let commandBefore="Bash command\n  python3 /synthetic/test.py\nDo you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel · Tab to amend"
         check(CLIInteractionPolicy.notice(screen:commandBefore)?.details.contains("python3 /synthetic/test.py") == true,"permission command context above the question is preserved")
         let trust="Do you trust the files in this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit\nEnter to confirm · Esc to cancel"
@@ -73,4 +76,5 @@ import AppKit
         print("\(count) CLI notice checks; \(failures) failed")
         if failures>0 {exit(1)}
     }
+    static func spinnerWithHint(_ hint:String) -> String {"✻ Thinking… (5s · ↓ 20 tokens)\n"+hint}
 }

@@ -4,6 +4,12 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-08 — build 73 — CLI组合快捷提示兼容
+
+- Recognize the observed combined auto-mode/agents footer hints, including separate rows and the alternate solid-triangle glyph. / 兼容截图中的auto mode与agents组合提示、分别成行及实心三角符号。
+- Share the bounded hint grammar with operational notice parsing; permission choices remain separate from message input, and unknown trailing text remains rejected. / 输入与操作提示共用有界的提示识别；选择菜单不会变成聊天输入，未知尾随内容仍拒绝。
+- Preserve build72 `2ae15ac`, previous failures and pending live acceptance. See the [build73 record](docs/testing/cli-combined-hints-2026-10-08.md). / 保留build72提交、此前失败及真实验收待确认状态，详见记录。
+
 ## 1.1.8 — 2026-10-08 — build 72 — 系统默认翻译与CLI提示
 
 - Default to system translation and retain the original input binding and fill/send choices after cloud failure, without a service-switch review step. / 系统翻译默认；云翻译失败后保留原输入绑定及填入／发送选择，不因切换翻译服务另设确认。

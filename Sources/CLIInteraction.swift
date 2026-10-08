@@ -63,7 +63,7 @@ enum CLIInteractionPolicy {
     }
     private static func chrome(_ raw:String) -> Bool {
         let line=raw.trimmingCharacters(in:.whitespaces)
-        return line.isEmpty || line.hasPrefix("A畜伴侣 CLI · ") || line == "? for shortcuts" ||
+        return line.isEmpty || line.hasPrefix("A畜伴侣 CLI · ") || CLIPromptPolicy.isHint(line) ||
             (line.count >= 3 && line.allSatisfy { "─━═".contains($0) })
     }
 }

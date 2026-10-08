@@ -90,9 +90,17 @@ enum CLIPromptPolicy {
         }
         return nil
     }
-    private static func isHint(_ line: String) -> Bool {
-        line == "? for shortcuts" || line == "-- INSERT --" ||
-        line.range(of: #"^(?:⏵{1,2} .+ \(shift\+tab to cycle\)|shift\+tab to cycle|ctrl\+g to edit in (?:editor|.+))$"#, options: .regularExpression) != nil
+    static func isHint(_ line: String) -> Bool {
+        // Claude can place several shortcuts on one row. Validate each known
+        // atom; a familiar first hint must not conceal arbitrary trailing text.
+        guard line.count <= 400 else { return false }
+        let parts = line.components(separatedBy: " · ")
+        guard parts.count <= 3 else { return false }
+        return parts.allSatisfy { part in
+            let hint = part.trimmingCharacters(in: .whitespaces)
+            return hint == "? for shortcuts" || hint == "-- INSERT --" || hint == "← for agents" ||
+                hint.range(of: #"^(?:[⏵▶]{1,2} .+ \(shift\+tab to cycle\)|shift\+tab to cycle|ctrl\+g to edit in (?:editor|.+))$"#, options: .regularExpression) != nil
+        }
     }
     static func diagnostic(_ screen: String) -> String {
         let tail = terminalLines(screen)

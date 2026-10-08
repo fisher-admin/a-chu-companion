@@ -40,6 +40,19 @@ import CryptoKit
         check(CLIPromptPolicy.prompt(screen:selection,binding:binding,origin:origin)==nil,"a numbered choice cursor is not a Claude message composer")
         check(CLIPromptPolicy.receipt(screen:pasted+"\nctrl+g to edit in editor",binding:binding,origin:origin,text:"Hello.") == .confirmed,"a recognized CLI editor hint does not block exact input verification")
         check(CLIPromptPolicy.receipt(screen:pasted+"\nctrl+g to execute unknown command",binding:binding,origin:origin,text:"Hello.") == .mismatch,"unknown text after the footer remains a boundary")
+        let agentsHint = "⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
+        let agentsInput = empty.replacingOccurrences(of:"? for shortcuts",with:agentsHint)
+        check(CLIPromptPolicy.prompt(screen:agentsInput,binding:binding,origin:origin)?.isEmpty == true,"the reported auto-mode and agents hint permits binding the current empty input")
+        let agentsSuggestion = agentsInput.replacingOccurrences(of:"❯ ",with:"❯ Try create a utility script")
+        check(CLIPromptPolicy.prompt(screen:agentsSuggestion,binding:binding,origin:origin)?.text == "Try create a utility script","the reported hint does not block a suggested input")
+        let agentsPasted = agentsInput.replacingOccurrences(of:"❯ ",with:"❯ Hello.")
+        check(CLIPromptPolicy.receipt(screen:agentsPasted,binding:binding,origin:origin,text:"Hello.") == .confirmed,"the reported combined hint permits an exact paste receipt")
+        check(CLIPromptPolicy.prompt(screen:agentsInput.replacingOccurrences(of:" · ← for agents",with:"\n← for agents"),binding:binding,origin:origin)?.isEmpty == true,"a separately rendered agents shortcut remains recognized")
+        check(CLIPromptPolicy.prompt(screen:agentsInput.replacingOccurrences(of:"⏵⏵",with:"▶▶"),binding:binding,origin:origin)?.isEmpty == true,"the alternate solid-triangle mode glyph preserves the same known hint")
+        check(CLIPromptPolicy.prompt(screen:agentsInput.replacingOccurrences(of:"← for agents",with:"← execute unknown command"),binding:binding,origin:origin)==nil,"a recognized mode does not authorize an unknown trailing shortcut")
+        check(CLIPromptPolicy.prompt(screen:agentsInput+"\nfisher@host %",binding:binding,origin:origin)==nil,"combined hints cannot hide a following shell prompt")
+        let agentsMenu = "Do you want to proceed?\n❯ 1. Yes\n  2. No\n"+footer+"\n"+agentsHint
+        check(CLIPromptPolicy.prompt(screen:agentsMenu,binding:binding,origin:origin)==nil,"combined hints never turn a numbered choice menu into an input composer")
         check(CLIPromptPolicy.receipt(screen:"❯ Previous user question\nPrevious answer\n"+pasted,binding:binding,origin:origin,text:"Hello.") == .confirmed,"old question prompts above the current composer separator do not invalidate its receipt")
         let literalBorder = empty.replacingOccurrences(of:"❯ ",with:"❯ Keep this border\n  ───")
         check(CLIPromptPolicy.receipt(screen:literalBorder,binding:binding,origin:origin,text:"Keep this border\n───") == .confirmed,"literal border characters inside the payload survive input parsing")
@@ -86,9 +99,11 @@ import CryptoKit
         env.key = { key, _, _ in
             events.append(key)
             if key == 9 {
+                let agentsFooter = screen.hasSuffix(agentsHint)
                 let previousPrompt = CLIPromptPolicy.prompt(screen:screen,binding:binding,origin:verifiedOrigin)?.text ?? ""
                 let inserted = pasteMode == "collapsed" ? "[Pasted text #1 +120 lines]" : (pasteMode == "append" ? previousPrompt : "") + board.string(forType:.string)!
                 screen = verifiedEmpty.replacingOccurrences(of:"❯ ",with:"❯ "+inserted.replacingOccurrences(of:"\n",with:"\n  "))
+                if agentsFooter {screen=screen.replacingOccurrences(of:"? for shortcuts",with:agentsHint)}
                 if pasteMode == "redraw" { redrawReads = 2 }
                 if pasteMode == "exit" { live = false }
                 if pasteMode == "switch" { focused = false }
@@ -102,6 +117,12 @@ import CryptoKit
         let sent = try await driver.deliver("Hello.",to:bound,autoSend:true,current:{current})
         check(sent == .sendKeyPressed && events == [9,36],"exact single-line paste sends once using the frozen session")
         check(board.string(forType:.string)=="Original clipboard","a successful CLI paste restores the previous clipboard")
+        screen=verifiedEmpty.replacingOccurrences(of:"? for shortcuts",with:agentsHint);events=[]
+        do {
+            let agentBound=try driver.bind(surface:surface,session:binding,origin:verifiedOrigin)
+            let agentSent=try await driver.deliver("Hello.",to:agentBound,autoSend:true,current:{current})
+            check(agentSent == .sendKeyPressed && events == [9,36],"the screenshot layout binds and sends a short translation exactly once")
+        } catch {check(false,"the screenshot layout must bind before the normal paste and Return path")}
         screen=verifiedEmpty; events=[]
         let inserted = try await driver.deliver("Hello.",to:bound,autoSend:false,current:{current})
         check(inserted == .inserted && events == [9],"turning off automatic send still pastes once without Return")
