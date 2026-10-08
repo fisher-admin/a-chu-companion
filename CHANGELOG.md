@@ -4,7 +4,14 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
-## 1.1.8 — 2026-10-07 — build 64 — optimization candidate / 三阶段优化候选
+## 1.1.8 — 2026-10-07 — build 65 — installed / 实测问题修订
+
+- Add a review notice for the observed statistical training-fold/discount mistranslation, without rewriting normal discount sentences. / 针对系统实测“训练折内→training discount”增加狭窄核对提示，保留候选并暂停自动发送；普通折扣语句不被改写。
+- Hold English/German output whose unprotected prose still contains substantial Chinese for explicit review; leave valid Japanese/Korean scripts and protected literals unchanged. / 英/德目标正文仍有较多中文时供人工核对；日/韩字符及代码、文件名等字面量不误判。
+- Preserve build64 as commit `67d924e`, including its 575-check regression and actual system-translation findings. / build64 保存为 `67d924e`，保留575项回归及真实系统翻译观察。
+- Four new checks first reproduced two missing safeguards; all 32 groups / 579 declared checks, 19 loopback HTTP checks and bridge contracts passed. Installed under the unchanged designated signing requirement with build64/63 backups preserved. Mac lock and protected system UI prevent completion of live acceptance; see the [execution record](docs/testing/optimization-results-2026-10-07.md). / 新4项用例先复现2项缺口，完整32组579项检查、本机HTTP19项及桥接检查通过；沿原签名安装，保留build64/63备份。Mac锁屏及受限系统界面导致真实验收尚未完成，参见执行记录。
+
+## 1.1.8 — 2026-10-07 — build 64 — installed checkpoint / 已安装优化检查点
 
 - Preserve Claude's original build63 as commit `207a06d`, without resetting the branch or rewriting earlier version history. / Claude 原始 build63 已保存为 `207a06d`；保留此前全部提交与实测记录。
 - Share cooldowns across incoming/outgoing cloud requests; preserve the primary error before local fallback, honor Retry-After, and bound temporary recovery to three attempts per slice. / 发送和回译共用服务等待状态；系统兜底前保留原失败原因，遵守限流等待，每片段临时失败最多自动尝试三次。

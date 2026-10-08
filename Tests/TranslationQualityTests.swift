@@ -35,6 +35,10 @@ import AppKit
         check(await rejected("Do not open the notebook.", "打开笔记本。", target: .chinese), "word-internal not in notebook cannot satisfy a negation contract")
         check(!(await rejected("The estimate is about 50%.", "估计值约50%。", target: .chinese)), "numbers attached to Chinese prose remain valid")
         check(!(await rejected("负零点三", "-0.3", target: .foreign(.english))), "spelled Chinese numbers may use numeric notation")
+        check(!TranslationFidelity.reviewReasons(source: "训练折内", translation: "Within the training discount", target: .foreign(.english)).isEmpty, "the observed statistical fold/discount conflict requires review")
+        check(TranslationFidelity.reviewReasons(source: "训练折扣", translation: "Training discount", target: .foreign(.english)).isEmpty, "ordinary discounts are not reinterpreted as statistics")
+        check(!TranslationFidelity.reviewReasons(source: "请保留原有设置。", translation: "请保留原有设置。", target: .foreign(.english)).isEmpty, "untranslated Chinese cannot silently pass an English delivery gate")
+        check(TranslationFidelity.reviewReasons(source: "请保留原有设置。", translation: "元の設定を維持してください。", target: .foreign(.japanese)).isEmpty, "valid Japanese Han characters are not treated as untranslated Chinese")
         let mixed = "你能解释 `config.json` 吗？"
         let assembled = try await TranslationFidelity.$target.withValue(.foreign(.english)) {
             try await TextTranslation.runProtected(mixed) { source in source.contains("解释") ? "Can you explain" : "?" }

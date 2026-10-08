@@ -160,6 +160,18 @@ enum TranslationFidelity {
             return max(1, regex.numberOfMatches(in: prose, range: NSRange(location: 0, length: (prose as NSString).length)))
         }
         let before = sentences(source), after = sentences(translation)
-        return before <= 3 && after > before ? ["译文句子增多，可能包含额外解释"] : []
+        var reasons = before <= 3 && after > before ? ["译文句子增多，可能包含额外解释"] : []
+        let statisticalFold = source.range(of: #"训练折(?:内|中|[，。\s]|$)|(?i:\btraining\s+folds?\b)"#, options: .regularExpression) != nil
+        let discount = translation.range(of: #"(?i:\bdiscount\b|rabatt)|折扣|割引|할인"#, options: .regularExpression) != nil
+        if statisticalFold && discount { reasons.append("统计学训练折可能被误译为折扣") }
+        if case let .foreign(language) = target, [.english, .german].contains(language) {
+            let prose = TranslationStructure.parts(translation).filter(\.translatable).map(\.text).joined()
+            let letters = prose.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+            let han = letters.filter { (0x3400...0x4DBF).contains($0.value) || (0x4E00...0x9FFF).contains($0.value) }.count
+            if han >= 4 && Double(han) / Double(max(1, letters.count)) > 0.3 {
+                reasons.append("目标为" + language.name + "，译文正文仍含较多中文")
+            }
+        }
+        return reasons
     }
 }

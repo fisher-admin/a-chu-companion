@@ -155,4 +155,7 @@ python3 Tests/SigningTests.py
 
 - `207a06d` 保存 Claude build63 原始修改及独立审查，保留全部旧提交。
 - build59–63 按历史批次补记；没有逐构建证据的部分不虚构单独发布记录。
-- build64 候选增加限流共享、有限恢复、当前入口额度隔离、共用翻译校验及正文保护。验收状态见 [执行结果](testing/optimization-results-2026-10-07.md)，方案见 [实施计划](testing/optimization-execution-plan-2026-10-07.md)。
+- build64 增加限流共享、有限恢复、当前入口额度隔离、共用翻译校验及正文保护。验收状态见 [执行结果](testing/optimization-results-2026-10-07.md)，方案见 [实施计划](testing/optimization-execution-plan-2026-10-07.md)。
+
+- `67d924e` 保存已安装build64及575项回归证据；系统四语言样本成功，表格样式/数值/路径保留，训练折词义冲突单独记录。
+- build65继续补充只供核对的训练折/折扣及英德目标中文残留检查；完整32组579项模拟、本机HTTP19项与桥接检查通过，沿原签名安装，冻结105个源文件无漂移。完整真实三端验收仍受Mac锁定和工具边界阻挡，保留待验收状态。

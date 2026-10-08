@@ -13,13 +13,13 @@ AChu Companion is a native macOS menu bar app that combines Chinese composition,
 
 This is an independent community project, not an Anthropic or official Claude product. It reduces copying and switching between tools, but does not guarantee that translated prompts are more accurate than the Chinese originals.
 
-## 1.1.7 development changes
+## Current development changes
 
 Formal originals appear immediately, while stable fragments are automatically translated before the whole turn ends. Existing Chinese prefixes, reading position, and text selection are preserved. Compatible-service credentials are isolated by endpoint; OpenAI/Grok presets retain separate model choices, while native Gemini stays unchanged. Passive health checks do not generate text.
 
 Usage/statusLine sources and read-only CLI/Chrome adapters remain experimental. After initial adapter setup, connecting a chat source automatically follows its usage without a separate usage-account confirmation. Settings provide supplementary acquisition and setup; unavailable identity clears previous values rather than falling back to another channel.
 
-**1.1.8 build64 is installed; follow-up live findings are tracked separately.** All 32 offline groups passed 575 declared checks, with 19 loopback HTTP checks, complete bridge contracts and repository/history scanning. Cooldown sharing, bounded recovery, current-entrance usage isolation and translation safeguards were independently tested. Live Desktop/Web/visible CLI acceptance is tracked separately in the [execution record](docs/testing/optimization-results-2026-10-07.md). The [build58 record](docs/testing/three-channel-active-usage-2026-10-07.md) and [Claude build63 review](docs/testing/claude-change-review-2026-10-07.md) preserve earlier failures and limits.
+**1.1.8 build65 is installed under the unchanged signing identity.** All 32 offline groups passed 579 declared checks, with 19 loopback HTTP checks, complete bridge contracts and repository/history scanning. Cooldown sharing, bounded recovery, current-entrance usage isolation and translation safeguards were independently tested. An observed system-translation training-fold/discount conflict now triggers review. Full live Desktop/Web/visible CLI acceptance remains incomplete and is tracked in the [execution record](docs/testing/optimization-results-2026-10-07.md). The [build58 record](docs/testing/three-channel-active-usage-2026-10-07.md) and [Claude build63 review](docs/testing/claude-change-review-2026-10-07.md) preserve earlier failures and limits.
 
 ## Features
 
