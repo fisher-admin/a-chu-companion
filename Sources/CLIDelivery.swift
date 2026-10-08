@@ -55,12 +55,6 @@ struct CLIProcessRecord {
 }
 
 enum CLIPromptPolicy {
-    enum Receipt { case confirmed, collapsed, mismatch }
-    struct Prompt {
-        let lines: [String]
-        var text: String { lines.joined(separator: "\n") }
-        var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    }
     static func terminalLines(_ screen: String) -> [String] {
         var lines = screen.suffix(32_768).components(separatedBy: .newlines)
         while lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeLast() }
@@ -71,7 +65,7 @@ enum CLIPromptPolicy {
         let start: Int
         let end: Int
     }
-    static func footer(screen: String, binding: String, origin: CLIDeliveryOrigin, requireInputHints: Bool = true) -> Footer? {
+    static func footer(screen: String, binding: String, origin: CLIDeliveryOrigin) -> Footer? {
         guard screen.utf16.count <= 500_000 else { return nil }
         let lines = terminalLines(screen)
         let prefix = "A畜伴侣 CLI · " + String(binding.suffix(6)) + " · "
@@ -83,8 +77,6 @@ enum CLIPromptPolicy {
         for end in start..<min(lines.count, start + 4) {
             joined += lines[end].trimmingCharacters(in: .whitespaces)
             if joined.hasPrefix(prefix), joined.hasSuffix(" · 输入 " + origin.tag) {
-                let following = lines.suffix(from: end + 1).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                if requireInputHints && !(following.count <= 3 && following.allSatisfy(isHint)) { return nil }
                 return .init(lines: lines, start: start, end: end)
             }
         }
@@ -102,57 +94,7 @@ enum CLIPromptPolicy {
                 hint.range(of: #"^(?:[⏵▶]{1,2} .+ \(shift\+tab to cycle\)|shift\+tab to cycle|ctrl\+g to edit in (?:editor|.+))$"#, options: .regularExpression) != nil
         }
     }
-    static func diagnostic(_ screen: String) -> String {
-        let tail = terminalLines(screen)
-        let footerCount = tail.filter { $0.contains("A畜伴侣 CLI · ") }.count
-        let inputCount = tail.filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("❯") }.count
-        return "（末尾标记 \(footerCount)，输入标识 \(inputCount)）"
-    }
-    static func prompt(screen: String, binding: String, origin: CLIDeliveryOrigin) -> Prompt? {
-        guard let footer = footer(screen: screen, binding: binding, origin: origin),
-              !footer.lines.joined(separator: "\n").contains("-- NORMAL --"),
-              CLIInteractionPolicy.notice(screen: screen) == nil else { return nil }
-        let tail = footer.lines
-        var end = footer.start
-        if end > 0, separator(tail[end - 1]) { end -= 1 }
-        guard let latest = tail.prefix(end).lastIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("❯") }) else { return nil }
-        let boundary = tail.prefix(latest).lastIndex(where: separator).map { $0 + 1 } ?? 0
-        let prompts = (boundary..<end).filter { tail[$0].trimmingCharacters(in: .whitespaces).hasPrefix("❯") }
-        guard prompts.count == 1, let start = prompts.first else { return nil }
-        // Preserve payload trailing whitespace. Only the known prompt gutter
-        // may be removed; receipt comparison does not trim or normalize text.
-        let first = String(tail[start].drop(while: { $0 == " " }))
-        var draft = String(first.dropFirst())
-        if draft.hasPrefix(" ") { draft.removeFirst() }
-        var body = [draft]
-        for line in tail[(start + 1)..<end] {
-            body.append(line.hasPrefix("  ") ? String(line.dropFirst(2)) : line)
-        }
-        while body.count > 1 && body.last?.isEmpty == true { body.removeLast() }
-        return .init(lines: body)
-    }
-    private static func separator(_ line: String) -> Bool {
-        let stripped = line.trimmingCharacters(in: .whitespaces)
-        return stripped.count >= 3 && stripped.allSatisfy { "─━═".contains($0) }
-    }
-    static func failureHint(screen: String?, binding: String, origin: CLIDeliveryOrigin) -> String {
-        guard let screen else { return "终端暂未提供文字" }
-        if CLIInteractionPolicy.notice(screen: screen) != nil { return "CLI 正在显示运行或选择提示" }
-        guard footer(screen: screen, binding: binding, origin: origin) != nil else { return "底部会话标记或提示行未匹配" }
-        guard prompt(screen: screen, binding: binding, origin: origin) != nil else { return "输入布局或输入标识未匹配" }
-        return "输入全文与译文不一致"
-    }
-    static func receipt(screen: String, binding: String, origin: CLIDeliveryOrigin, text: String) -> Receipt {
-        guard let prompt = prompt(screen: screen, binding: binding, origin: origin) else { return .mismatch }
-        if prompt.text == text || (!text.contains("\n") && prompt.lines.joined() == text) { return .confirmed }
-        if prompt.text.range(of: "^\\[Pasted text #[0-9]+ \\+[0-9]+ lines?\\]$", options: .regularExpression) != nil { return .collapsed }
-        return .mismatch
-    }
-    static func maySend(_ text: String, receipt: Receipt) -> Bool {
-        // Multiline/table pastes are filled, but native CLI renderers can hide
-        // hard breaks and Enter modes. Exact single-line receipt is required.
-        receipt == .confirmed && !text.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
-    }
+
 }
 
 @MainActor final class CLITargetBridge {
@@ -162,6 +104,7 @@ enum CLIPromptPolicy {
         let focus: AXUIElement
         let element: AXUIElement
         var name: String { app.localizedName ?? "终端" }
+        var location: ManualInputDelivery.Location { .init(app: app, window: window, input: focus) }
     }
     struct Binding {
         let id = UUID()
@@ -169,25 +112,32 @@ enum CLIPromptPolicy {
         let origin: CLIDeliveryOrigin
         let surface: Surface
     }
-    enum Outcome { case inserted, sendKeyPressed, collapsed, unconfirmed }
+    typealias Outcome = ManualInputDelivery.Outcome
     @MainActor struct Environment {
         var trusted: @MainActor () -> Bool = { TargetBridge.trusted }
-        var alive: @MainActor (Surface) -> Bool = { !$0.app.isTerminated }
+        var alive: @MainActor (Surface) -> Bool = { ManualInputDelivery.available($0.location) }
         var screen: @MainActor (Surface) -> String? = CLITargetBridge.screen
         var live: @MainActor (CLIDeliveryOrigin) -> Bool = { CLIProcessRecord.read($0.pid)?.matches($0) == true }
         var focused: @MainActor (Surface, Bool) -> Bool = CLITargetBridge.focused
-        var companionActive: @MainActor () -> Bool = { NSApp.isActive || NSApp.keyWindow?.isKeyWindow == true }
-        var activate: @MainActor (Surface) -> Void = { $0.app.activate() }
+        var activate: @MainActor (Surface) -> Void = { ManualInputDelivery.restore($0.location) }
         var key: @MainActor (CGKeyCode, CGEventFlags, pid_t) throws -> Void = { try TargetBridge.key($0, flags: $1, pid: $2) }
         var board: NSPasteboard = .general
     }
     private let environment: Environment
-    private(set) var receiptHint = ""
-    private var pasteAttempt: (binding: UUID, translation: String, prompt: String)?
-    private static func fingerprint(_ text: String) -> String {
-        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    let inputDelivery: ManualInputDelivery
+    init(environment: Environment? = nil) {
+        let env = environment ?? .init(); self.environment = env
+        func surface(_ location: ManualInputDelivery.Location) -> Surface {
+            .init(app: location.app, window: location.window, focus: location.input, element: location.input)
+        }
+        var sending = ManualInputDelivery.Environment()
+        sending.trusted = env.trusted
+        sending.available = { env.alive(surface($0)) }
+        sending.restore = { env.activate(surface($0)) }
+        sending.focused = { env.focused(surface($0), true) }
+        sending.key = env.key; sending.board = env.board
+        inputDelivery = ManualInputDelivery(environment: sending)
     }
-    init(environment: Environment? = nil) { self.environment = environment ?? .init() }
     static func capture() throws -> Surface {
         guard TargetBridge.trusted, let app = NSWorkspace.shared.frontmostApplication,
               app.processIdentifier != getpid() else { throw BridgeError.message("请先点击 Claude Code 终端输入区，再按 ⌃⌥E。") }
@@ -201,25 +151,12 @@ enum CLIPromptPolicy {
         return try captureSurface(app: app, focus: focus, window: window)
     }
     static func captureSurface(app: NSRunningApplication, focus: AXUIElement, window: AXUIElement) throws -> Surface {
-        // Only the focused subtree. Never search other windows/tabs/panes.
-        var queue = [focus], candidates: [AXUIElement] = [], textAreas: [AXUIElement] = [], visited: Set<CFHashCode> = []
-        while !queue.isEmpty && visited.count < 64 {
-            let item = queue.removeFirst(); guard visited.insert(CFHash(item)).inserted else { continue }
-            if TargetBridge.attribute(item, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole { continue }
-            if let value = TargetBridge.attribute(item, kAXValueAttribute) as? String {
-                if value.contains("A畜伴侣 CLI · ") { candidates.append(item); continue }
-                if [kAXTextAreaRole, kAXTextFieldRole].contains(TargetBridge.attribute(item, kAXRoleAttribute) as? String ?? "") {
-                    textAreas.append(item)
-                }
-            }
-            queue += (TargetBridge.attribute(item, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(32)
+        // The user selected this exact focus. Its contents, role, terminal
+        // brand and footer are not prerequisites for a sending connection.
+        guard TargetBridge.attribute(focus, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole else {
+            throw BridgeError.message("密码输入区不能作为对话发送位置。")
         }
-        // A first status-line report may arrive only after configuring the
-        // adapter. Capture one text surface now; bind/deliver still require the
-        // exact current footer and process identity before any input operation.
-        let surfaces = candidates.isEmpty ? textAreas : candidates
-        guard surfaces.count == 1 else { throw BridgeError.message("当前终端未提供唯一的文字输入表面（文字区 \(textAreas.count)，标记区 \(candidates.count)）。请点中 Claude Code 输入区再按 ⌃⌥E；未自动选择其他窗口。") }
-        return .init(app: app, window: window, focus: focus, element: surfaces[0])
+        return .init(app: app, window: window, focus: focus, element: focus)
     }
     static func screen(_ surface: Surface) -> String? {
         AXUIElementSetMessagingTimeout(surface.element, 0.1)
@@ -251,103 +188,24 @@ enum CLIPromptPolicy {
         return false
     }
     func bind(surface: Surface, session: String, origin: CLIDeliveryOrigin) throws -> Binding {
-        guard origin.valid(for: session) else { throw BridgeError.message("CLI 输入标记不匹配，仍可只读和复制。") }
-        let binding = Binding(session: session, origin: origin, surface: surface)
-        try validate(binding, frontmost: false)
-        return binding
+        guard origin.valid(for: session) else { throw BridgeError.message("CLI 读取身份无效，发送位置保持。") }
+        try inputDelivery.validate(surface.location)
+        return Binding(session: session, origin: origin, surface: surface)
     }
     func validate(_ binding: Binding, frontmost: Bool) throws {
-        try validateIdentity(binding, frontmost: frontmost)
-        guard let screen = environment.screen(binding.surface) else { throw BridgeError.message("当前终端暂未提供输入区文字，尚未绑定自动填入。") }
-        guard CLIPromptPolicy.prompt(screen: screen, binding: binding.session, origin: binding.origin) != nil else {
-            throw BridgeError.message("当前 CLI 输入区与底部输入标记尚未匹配" + CLIPromptPolicy.diagnostic(screen) + "。等待同一窗口刷新，无需选择会话。")
-        }
-        // The rendered text can be a suggestion, not the editable draft.
-        // Let CLI's normal paste dismiss it; verify exact receipt afterward.
+        try inputDelivery.validate(binding.surface.location)
     }
-    func passiveScreen(_ binding: Binding) -> (String?, Bool) {
-        // No activation, paste, key, or search outside the bound surface.
-        guard (try? validateIdentity(binding, frontmost: false)) != nil,
-              let screen = environment.screen(binding.surface) else { return (nil, false) }
-        let matched = CLIPromptPolicy.footer(screen: screen, binding: binding.session, origin: binding.origin, requireInputHints: false) != nil
-        return (screen, matched)
+    func readMatches(surface: Surface, session: String, origin: CLIDeliveryOrigin) -> Bool {
+        guard origin.valid(for: session), environment.live(origin), let screen = environment.screen(surface) else { return false }
+        return CLIPromptPolicy.footer(screen: screen, binding: session, origin: origin) != nil
     }
-    private func validateIdentity(_ binding: Binding, frontmost: Bool) throws {
-        guard environment.trusted() else { throw BridgeError.message("辅助功能权限当前不可用，未自动填入 CLI。") }
-        guard environment.alive(binding.surface) else { throw BridgeError.message("原终端已关闭，未自动填入 CLI。") }
-        guard environment.focused(binding.surface, frontmost) else { throw BridgeError.message("原终端窗口或输入焦点尚未核对，未自动填入 CLI；请在原输入区按 ⌃⌥E。") }
-        guard environment.live(binding.origin) else { throw BridgeError.message("CLI 原进程已退出、挂起或改变，未自动发送。译文已保留。") }
+    func passiveScreen(_ surface: Surface) -> (String?, Bool) {
+        guard (try? inputDelivery.validate(surface.location)) != nil else { return (nil, false) }
+        let value = environment.screen(surface)
+        return (value, value != nil)
     }
+    func passiveScreen(_ binding: Binding) -> (String?, Bool) { passiveScreen(binding.surface) }
     func deliver(_ text: String, to binding: Binding, autoSend: Bool, current: () -> Bool) async throws -> Outcome {
-        receiptHint = ""
-        let beginning = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !beginning.hasPrefix("!"), !beginning.hasPrefix("/") else {
-            throw BridgeError.message("译文以 CLI 命令符号开头，未自动填入。请复制后在终端核对，避免改变输入模式。")
-        }
-        guard current(), environment.companionActive() else { throw BridgeError.message("连接或当前软件已改变，没有自动填入 CLI。译文已保留。") }
-        try validate(binding, frontmost: false)
-        try Task.checkCancellation()
-        environment.activate(binding.surface)
-        for _ in 0..<16 {
-            if environment.focused(binding.surface, true) { break }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        guard current() else { throw BridgeError.message("CLI 来源已切换，未自动粘贴。") }
-        try validate(binding, frontmost: true)
-        let translationFingerprint = Self.fingerprint(text)
-        if let previous = pasteAttempt, previous.binding == binding.id, previous.translation == translationFingerprint,
-           let screen = environment.screen(binding.surface),
-           let prompt = CLIPromptPolicy.prompt(screen: screen, binding: binding.session, origin: binding.origin),
-           previous.prompt == Self.fingerprint(prompt.text) {
-            throw BridgeError.message("此译文已尝试填入，原 CLI 内容尚未改变；未重复粘贴。请在终端核对后发送。")
-        }
-        let board = environment.board
-        let previous = (board.pasteboardItems ?? []).map { item in item.types.compactMap { type in item.data(forType: type).map { (type, $0) } } }
-        board.clearContents()
-        guard board.setString(text, forType: .string) else { throw BridgeError.message("无法写入剪贴板，译文已保留。") }
-        let owned = board.changeCount
-        defer {
-            if board.changeCount == owned {
-                board.clearContents()
-                let items = previous.map { values in let item = NSPasteboardItem(); for (type, data) in values { item.setData(data, forType: type) }; return item }
-                if !items.isEmpty { board.writeObjects(items) }
-            }
-        }
-        try Task.checkCancellation()
-        guard current() else { throw BridgeError.message("CLI 连接已改变，未自动粘贴。") }
-        try validate(binding, frontmost: true)
-        try environment.key(9, .maskCommand, binding.surface.app.processIdentifier)
-        pasteAttempt = nil
-        var stable = 0
-        for _ in 0..<40 {
-            try await Task.sleep(for: .milliseconds(50))
-            guard current() else { throw BridgeError.message("CLI 来源在粘贴后改变，没有自动发送；请检查原输入区。") }
-            try validateIdentity(binding, frontmost: true)
-            // Some native terminal redraws briefly remove the accessible text.
-            // Wait inside the same receipt window, without another paste.
-            guard let screen = environment.screen(binding.surface) else { receiptHint = "终端暂未提供文字"; stable = 0; continue }
-            receiptHint = CLIPromptPolicy.failureHint(screen: screen, binding: binding.session, origin: binding.origin)
-            if let prompt = CLIPromptPolicy.prompt(screen: screen, binding: binding.session, origin: binding.origin) {
-                pasteAttempt = (binding.id, translationFingerprint, Self.fingerprint(prompt.text))
-            }
-            let receipt = CLIPromptPolicy.receipt(screen: screen, binding: binding.session, origin: binding.origin, text: text)
-            if receipt == .collapsed { return .collapsed }
-            stable = receipt == .confirmed ? stable + 1 : 0
-            if stable < 3 { continue }
-            guard autoSend, CLIPromptPolicy.maySend(text, receipt: receipt) else { return .inserted }
-            try Task.checkCancellation()
-            guard current() else { throw BridgeError.message("CLI 来源已改变，没有自动发送。") }
-            try validate(binding, frontmost: true)
-            guard let latest = environment.screen(binding.surface),
-                  CLIPromptPolicy.receipt(screen: latest, binding: binding.session, origin: binding.origin, text: text) == .confirmed else { return .unconfirmed }
-            try Task.checkCancellation()
-            guard current(), environment.focused(binding.surface, true), environment.live(binding.origin) else {
-                throw BridgeError.message("CLI 在发送前发生变化，未按回车。请检查原输入区。")
-            }
-            try environment.key(36, [], binding.surface.app.processIdentifier)
-            pasteAttempt = nil
-            return .sendKeyPressed
-        }
-        return .unconfirmed
+        try await inputDelivery.deliver(text, to: .init(id: binding.id, location: binding.surface.location), autoSend: autoSend, current: current)
     }
 }

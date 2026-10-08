@@ -4,6 +4,14 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-08 — build 74 — 手选输入位置、三端统一发送
+
+- Pin the input chosen by the user's shortcut immediately and share one sending implementation across Desktop, Web and CLI. Read-source/usage reports cannot clear or redirect the sending target. / 快捷键立即保存手选输入位置，桌面、网页、CLI共用发送实现；回复或额度报告不清除、不改投发送目标。
+- Remove semantic quality rejection, review notices and assembled-text gates from outgoing and incoming translation. Retain provider-only-translation instructions, formatting and service fallback. / 删除发送和回译中的质量拒绝、核对提示及拼接后审核；保留仅翻译指令、格式处理和服务备用翻译。
+- Dispatch one paste and optional Return without inspecting recommendations, CLI layouts, input value/caret or paste receipts. Include multiline, tables and collapsed displays; restore only the selected physical window/input. / 不检查建议、布局、输入内容／光标或粘贴回执；单行、多行、表格与折叠显示都按设置粘贴和回车，仅恢复选定的窗口／输入位置。
+- Preserve cancellation, changed Chinese drafts and replaced connection identities. Report missing physical targets and partial dispatch explicitly; never retry a paste automatically. / 保留取消、中文草稿改变及连接更换的处理；输入位置失效和部分按键失败给出具体提示，不自动重复粘贴。
+- Preserve build73 `62b7571` and all prior verification history. See the [build74 record](docs/testing/manual-input-direct-send-2026-10-08.md). / 保留build73提交及历次验证记录，详见本次记录。
+
 ## 1.1.8 — 2026-10-08 — build 73 — CLI组合快捷提示兼容
 
 - Recognize the observed combined auto-mode/agents footer hints, including separate rows and the alternate solid-triangle glyph. / 兼容截图中的auto mode与agents组合提示、分别成行及实心三角符号。

@@ -4,7 +4,7 @@ import ApplicationServices
 import CryptoKit
 
 // Standalone, synthetic native surface. Never starts, controls or impersonates
-// a real terminal. AX, clipboard, Cocoa keyboard events and system translation
+// a real terminal. AX, clipboard, native paste handling and system translation
 // are real; process/focus identity and cross-process transport are synthetic.
 @MainActor final class SyntheticCLITextView: NSTextView {
     var footer = ""
@@ -68,7 +68,6 @@ import CryptoKit
         // UI automation does not make this test app the system frontmost app.
         // Model that boundary explicitly; all events still target this PID.
         // Production focus/foreground guards are exercised by delivery tests.
-        env.companionActive={true}
         env.focused={surface,_ in surface.app.processIdentifier == getpid()}
         // In production this activates another app and restores its window.
         // The fixture has two windows in one app, so restore its saved window.
@@ -78,6 +77,14 @@ import CryptoKit
         // fixture identity; no extra user grant is needed for own Cocoa events.
         env.key={ [weak self] key,flags,pid in
             guard let self,pid==getpid(),[9,36].contains(key) else {throw BridgeError.message("模拟事件目标不是自身")}
+            // CUA keeps this app in the background. Cmd+V's global menu route
+            // therefore cannot stand in for a foreground cross-process key.
+            // Exercise the same native paste action in this process directly.
+            if key == 9 {
+                guard self.terminal.firstResponder === self.screen else {throw BridgeError.message("模拟输入位置未恢复")}
+                guard NSApp.sendAction(#selector(NSText.paste(_:)),to:self.screen,from:nil) else {throw BridgeError.message("模拟粘贴动作失败")}
+                return
+            }
             let characters=key==9 ? "v":"\r"
             guard let event=NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:flags.contains(.maskCommand) ? .command:[],timestamp:ProcessInfo.processInfo.systemUptime,windowNumber:self.terminal.windowNumber,context:nil,characters:characters,charactersIgnoringModifiers:characters,isARepeat:false,keyCode:key) else {throw BridgeError.message("模拟事件无法创建")}
             NSApp.postEvent(event,atStart:false)
@@ -136,6 +143,20 @@ import CryptoKit
                     self.screen.inputHint="⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
                     self.screen.suggestion="Try create a utility script"
                     self.prepare("你好",foreign:"Hello.",collapsed:false);self.connect()
+                }
+            }.padding(.bottom,6)
+            HStack {
+                Button("取消质量审核场景") {
+                    self.screen.inputHint="⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
+                    self.screen.suggestion="Try create a utility script"
+                    self.model.engine="gemini";self.model.testFallback=nil
+                    self.prepare("请运行20次。",foreign:"Please run 30 times.",collapsed:false);self.connect()
+                }
+                Button("备用译文无需审核场景") {
+                    self.model.engine="gemini"
+                    self.prepare("结果可靠吗？",foreign:"The result is reliable.",collapsed:false)
+                    self.model.testTranslation={_ in throw BridgeError.message("Gemini 模拟503。")}
+                    self.model.testFallback={_ in "The result is reliable."};self.connect()
                 }
             }.padding(.bottom,6)
             MainView(model:model,usage:usage)

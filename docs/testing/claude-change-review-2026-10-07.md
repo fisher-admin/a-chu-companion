@@ -3,6 +3,8 @@
 审查日期：2026-10-07。对照提交：`a783f6071ad5cb2a4fcabc353a352c203c781eb9`。
 审查对象：当前工作区的 1.1.7 build63；15 个已修改文件、4 个新增文件，尚未提交。本报告本身另计。
 
+历史说明：以下内容保留审查当时的发现与建议。build74 按用户要求移除了译文质量审核；已删除的 `TranslationFidelity.swift` 仍保存在 build63 提交 `207a06d9a9cde0bd7c2f2f86975e4914d517b287` 中，可用 `git show 207a06d:Sources/TranslationFidelity.swift` 查看，不属于现行发送规则。
+
 ## 结论
 
 **这次修改有实质收益，但尚不满足可发布、三端完整验收通过的标准。**
@@ -80,7 +82,7 @@ Claude 增加了共享译文检查、系统翻译兜底、按完整回复刷新�
 
 ### R4 — 高：新检查只能拦部分形状，仍不能保证只翻译
 
-依据：[TranslationFidelity.swift](../../Sources/TranslationFidelity.swift#L74)、[TextTranslation.swift](../../Sources/TextTranslation.swift#L68)。
+依据：build63 历史源码 `TranslationFidelity.swift` 第 74 行（提交 `207a06d`）、[TextTranslation.swift](../../Sources/TextTranslation.swift#L68)。
 
 长度、新增结构和末尾问号的检查有价值，但短句的固定余量允许附加回答；没有验证语义、否定或目标语言。表格单元格有上下文时，还会绕过新共享检查。
 
@@ -96,7 +98,7 @@ Claude 增加了共享译文检查、系统翻译兜底、按完整回复刷新�
 
 ### R5 — 中：负数被当成新增列表，合法译文遭拒
 
-依据：[TranslationFidelity.swift](../../Sources/TranslationFidelity.swift#L60)。
+依据：build63 历史源码 `TranslationFidelity.swift` 第 60 行（提交 `207a06d`）。
 
 列表识别允许列表符号后没有空格，因此 `-0.3` 被识别为列表。独立复现：`负零点三` → `-0.3` 因“原文没有的列表”被拒。系统兜底也使用相同规则，未必能救回。
 

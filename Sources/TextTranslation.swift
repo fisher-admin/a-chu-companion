@@ -32,7 +32,6 @@ enum TranslationChunks {
             result += part.tableCell && part.translatable ? MarkdownTable.escapeCell(value) : value
             partial(result)
         }
-        try TranslationFidelity.validateAssembly(source: text, translation: result, target: TranslationFidelity.target)
         return result
     }
 
@@ -48,7 +47,6 @@ enum TranslationChunks {
             result += try await piece(chunk, timeout: timeout, translate: translate)
         }
         try Task.checkCancellation()
-        try TranslationFidelity.validateAssembly(source: text, translation: result, target: TranslationFidelity.target)
         return result
     }
 
@@ -65,20 +63,12 @@ enum TranslationChunks {
             try Task.checkCancellation()
             let translated = value.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !translated.isEmpty else { throw BridgeError.message("翻译服务返回空白片段，未提交译文。") }
-            // Short contextual cells must not turn into translations of the
-            // surrounding paragraph. Keep the original and offer explicit retry.
-            if TranslationContext.source != nil, core.count <= 80, translated.count > max(80, core.count * 6) {
-                throw BridgeError.message("单元格译文异常过长，可能混入周围正文；未显示该结果，请重试。")
-            }
-            // Check the raw provider output: flattening below would otherwise
-            // hide an appended answer paragraph, heading or table.
-            try TranslationFidelity.validate(source: core, translation: translated, target: TranslationFidelity.target)
             // Provider-added line breaks are formatting, not new paragraphs.
             // Literal multiline source and table-cell escaping remain intact.
             let normalized = TranslationContext.source == nil && !core.contains(where: \.isNewline)
                 ? translated.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
                 : translated
-            return prefix + TranslationContext.qualifiedCellOutput(normalized, original: core) + suffix
+            return prefix + normalized + suffix
         } catch TranslationChunkError.tooLarge {
             guard core.count > 64 else { throw TranslationChunkError.tooLarge }
             var result = prefix

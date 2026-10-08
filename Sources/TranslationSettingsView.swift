@@ -29,7 +29,7 @@ import SwiftUI
             }.pickerStyle(.segmented)
             if engine == "apple" {
                 Label("无需 API 密钥", systemImage: "checkmark.seal").font(.headline)
-                Text("使用苹果系统翻译。可在主窗口选择英文、德文、日文或韩文，回复始终译回中文。首次使用某种语言可能需要下载语言包；发送前建议检查译文。")
+                Text("使用苹果系统翻译。可在主窗口选择英文、德文、日文或韩文，回复始终译回中文。首次使用某种语言可能需要下载语言包；译文完成后按主窗口的发送设置继续。")
                     .font(.system(size: 13)).foregroundStyle(.secondary)
             } else {
                 if engine == "gemini" {

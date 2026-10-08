@@ -154,25 +154,23 @@ import Foundation
             var primaryFailure: Error?
             do {
                 var fallbackReason: Error?
-                let translated = slice.part.translatable ? try await TranslationFidelity.$target.withValue(.chinese) {
-                    try await TranslationContext.$source.withValue(slice.part.context) {
-                        if self.now < self.cooldownUntil, let fallback = self.fallback {
-                            primaryFailure = ServiceCooldown(seconds: self.cooldownUntil - self.now)
-                            let value = try await TextTranslation.run(slice.part.text, translate: fallback)
-                            fallbackReason = primaryFailure
-                            return value
-                        }
-                        do { return try await TextTranslation.run(slice.part.text, translate: self.translate) }
-                        catch let error where !(error is CancellationError) && !Task.isCancelled {
-                            guard self.epoch == token else { throw CancellationError() }
-                            primaryFailure = error
-                            if let wait = error as? ServiceCooldown { self.cooldownUntil = max(self.cooldownUntil, self.now + wait.seconds) }
-                            if let wait = error as? ServiceTransientError { self.cooldownUntil = max(self.cooldownUntil, self.now + wait.seconds) }
-                            guard self.fallback != nil else { throw error }
-                            let value = try await TextTranslation.run(slice.part.text, translate: self.fallback!)
-                            fallbackReason = error
-                            return value
-                        }
+                let translated = slice.part.translatable ? try await TranslationContext.$source.withValue(slice.part.context) {
+                    if self.now < self.cooldownUntil, let fallback = self.fallback {
+                        primaryFailure = ServiceCooldown(seconds: self.cooldownUntil - self.now)
+                        let value = try await TextTranslation.run(slice.part.text, translate: fallback)
+                        fallbackReason = primaryFailure
+                        return value
+                    }
+                    do { return try await TextTranslation.run(slice.part.text, translate: self.translate) }
+                    catch let error where !(error is CancellationError) && !Task.isCancelled {
+                        guard self.epoch == token else { throw CancellationError() }
+                        primaryFailure = error
+                        if let wait = error as? ServiceCooldown { self.cooldownUntil = max(self.cooldownUntil, self.now + wait.seconds) }
+                        if let wait = error as? ServiceTransientError { self.cooldownUntil = max(self.cooldownUntil, self.now + wait.seconds) }
+                        guard self.fallback != nil else { throw error }
+                        let value = try await TextTranslation.run(slice.part.text, translate: self.fallback!)
+                        fallbackReason = error
+                        return value
                     }
                 } : slice.part.text
                 let value = slice.part.tableCell && slice.part.translatable ? MarkdownTable.escapeCell(translated) : translated
@@ -181,10 +179,7 @@ import Foundation
                 records[id]?.slices[index].retryAt = nil
                 records[id]?.slices[index].attempts = 0
                 publish(id)
-                let review = TranslationFidelity.reviewReasons(source: slice.part.text, translation: translated, target: .chinese)
-                if !review.isEmpty {
-                    onStatus("本段中文已显示，译文需要核对（" + review.joined(separator: "；") + "）；继续读取后续原文。", false)
-                } else if let fallbackReason {
+                if let fallbackReason {
                     onStatus("翻译服务未能提供可用译文（" + fallbackReason.localizedDescription + "），本段已改用系统翻译。", false)
                 } else {
                     onStatus(hasFailures ? "部分片段翻译失败，原文和已有中文已保留；可重试未完成片段。" : "阶段性中文已更新，继续读取后续回复。", false)

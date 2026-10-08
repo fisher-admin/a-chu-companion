@@ -1,21 +1,12 @@
 import Foundation
 import AppKit
 
+// Provider output is no longer subject to a second semantic quality gate.
 @main struct TranslationQualityTests {
     static var count = 0, failures = 0
     @MainActor static func check(_ value: Bool, _ name: String) {
         count += 1
         if value { print("PASS: " + name) } else { failures += 1; print("FAIL: " + name) }
-    }
-    @MainActor static func rejected(_ source: String, _ candidate: String, target: TranslationTarget, context: String? = nil) async -> Bool {
-        do {
-            _ = try await TranslationFidelity.$target.withValue(target) {
-                try await TranslationContext.$source.withValue(context) {
-                    try await TextTranslation.run(source) { _ in candidate }
-                }
-            }
-            return false
-        } catch { return error is TranslationFidelityError }
     }
     @MainActor static func settle(_ model: TranslatorModel) async throws {
         let end = ContinuousClock.now.advanced(by: .seconds(3))
@@ -26,82 +17,67 @@ import AppKit
         setvbuf(stdout, nil, _IONBF, 0); _ = NSApplication.shared
         let savedLanguage = CompanionPreferences.store.object(forKey: "targetLanguage")
         defer { CompanionPreferences.store.set(savedLanguage, forKey: "targetLanguage") }
-        check(await rejected("不要删除文件。", "Delete the files.", target: .foreign(.english)), "clear negative commands cannot become positive commands")
-        check(await rejected("是否可行？", "Yes, it is feasible.", target: .foreign(.english), context: "Neighbouring table data"), "table context does not permit answering a source question")
-        check(await rejected("Is the design valid?", "是的，这个设计有效。", target: .chinese), "a reverse question translation cannot become a Chinese answer")
-        for (language, candidate) in [(TranslationLanguage.english, "Do not delete the files."), (.german, "Löschen Sie die Dateien nicht."), (.japanese, "ファイルを削除しないでください。"), (.korean, "파일을 삭제하지 마세요.")] {
-            check(!(await rejected("不要删除文件。", candidate, target: .foreign(language))), "a faithful negative command remains valid in " + language.rawValue)
+        let candidates = [
+            ("结果可靠吗？", "The result is reliable."),
+            ("不要删除文件。", "Delete the files."),
+            ("请运行20次。", "Please run 30 times."),
+            ("请保留原有设置。", "请保留原有设置。"),
+            ("训练折内。", "Within the training discount."),
+            ("请解释。", String(repeating: "A longer provider translation. ", count: 20).trimmingCharacters(in: .whitespaces)),
+            ("请保留。", "Please retain it. This is another sentence.")
+        ]
+        for (source, candidate) in candidates {
+            do {
+                let result = try await TextTranslation.run(source) { _ in candidate }
+                check(result == candidate, "provider output passes without a semantic quality gate")
+            } catch { check(false, "provider output passes without a semantic quality gate") }
         }
-        check(await rejected("Do not open the notebook.", "打开笔记本。", target: .chinese), "word-internal not in notebook cannot satisfy a negation contract")
-        check(!(await rejected("The estimate is about 50%.", "估计值约50%。", target: .chinese)), "numbers attached to Chinese prose remain valid")
-        check(!(await rejected("负零点三", "-0.3", target: .foreign(.english))), "spelled Chinese numbers may use numeric notation")
-        check(!TranslationFidelity.reviewReasons(source: "训练折内", translation: "Within the training discount", target: .foreign(.english)).isEmpty, "the observed statistical fold/discount conflict requires review")
-        check(TranslationFidelity.reviewReasons(source: "训练折扣", translation: "Training discount", target: .foreign(.english)).isEmpty, "ordinary discounts are not reinterpreted as statistics")
-        check(!TranslationFidelity.reviewReasons(source: "请保留原有设置。", translation: "请保留原有设置。", target: .foreign(.english)).isEmpty, "untranslated Chinese cannot silently pass an English delivery gate")
-        check(TranslationFidelity.reviewReasons(source: "请保留原有设置。", translation: "元の設定を維持してください。", target: .foreign(.japanese)).isEmpty, "valid Japanese Han characters are not treated as untranslated Chinese")
-        check(!(await rejected("请说明结果是否可靠？", "Please explain whether the result is reliable.", target: .foreign(.english))), "a faithful indirect English question need not end in a question mark")
-        check(!(await rejected("请说明结果是否可靠？", "Bitte erklären Sie, ob das Ergebnis zuverlässig ist.", target: .foreign(.german))), "a faithful indirect German question need not end in a question mark")
-        check(!(await rejected("请说明结果是否可靠？", "Bitte geben Sie an, ob die Ergebnisse zuverlässig sind.", target: .foreign(.german))), "the observed German request to state whether remains an indirect question")
-        var observedGerman = ""
         do {
-            observedGerman = try await TranslationFidelity.$target.withValue(.foreign(.german)) {
-                try await TextTranslation.runProtected("不要删除 `keep.json`。请运行20次，并说明结果是否可靠？") { source in
-                    source.contains("不要") ? "Nicht löschen" : "Bitte führen Sie es 20 Mal aus und geben Sie an, ob die Ergebnisse zuverlässig sind."
-                }
+            let candidate = String(repeating: "Expanded cell text. ", count: 10).trimmingCharacters(in: .whitespaces)
+            let result = try await TranslationContext.$source.withValue("Neighbouring table text") {
+                try await TextTranslation.run("Label") { _ in candidate }
             }
-        } catch { }
-        check(observedGerman.contains("`keep.json`") && observedGerman.contains("20") && observedGerman.contains("geben Sie an, ob"), "the observed indirect German request survives protected-fragment translation and reassembly")
-        check(await rejected("结果可靠吗？", "Geben Sie an, ob die Ergebnisse zuverlässig sind.", target: .foreign(.german)), "an indirect German command cannot excuse a changed direct question")
-        check(!TranslationFidelity.reviewReasons(source: "请说明结果是否可靠？", translation: "Bitte geben Sie an, ob die Ergebnisse zuverlässig sind. Ja, sie sind zuverlässig.", target: .foreign(.german)).isEmpty, "an answer added after the observed German command still requires review")
-        check(await rejected("结果可靠吗？", "The result is reliable.", target: .foreign(.english)), "a direct question cannot become a declarative answer")
-        check(await rejected("请说明结果是否可靠？", "Yes, the result is reliable.", target: .foreign(.english)), "an indirect question cannot become a yes answer")
-        check(await rejected("请解释结论。结果可靠吗？", "Please explain the conclusion. The result is reliable.", target: .foreign(.english)), "an earlier explanation command cannot exempt a later direct question")
-        check(!TranslationFidelity.reviewReasons(source: "请说明结果是否可靠？", translation: "Please explain whether the result is reliable. Yes, it is.", target: .foreign(.english)).isEmpty, "an answer appended to an indirect question still requires review")
-        let mixed = "你能解释 `config.json` 吗？"
-        let assembled = try await TranslationFidelity.$target.withValue(.foreign(.english)) {
-            try await TextTranslation.runProtected(mixed) { source in source.contains("解释") ? "Can you explain" : "?" }
-        }
-        check(assembled.contains("`config.json`") && assembled.hasSuffix("?"), "a question split by protected code is checked as one assembled request")
+            check(result == candidate, "table cell length does not trigger a translation quality rejection")
+        } catch { check(false, "table cell length does not trigger a translation quality rejection") }
 
-        let model = TranslatorModel(permissionCheck: { true }, remoteKeyRead: { _ in "synthetic-gemini-key" })
+        let model = TranslatorModel(permissionCheck: { true }, remoteKeyRead: { _ in "synthetic-key" })
         defer { model.cancel(); model.replies.stop(); model.stopPermissionMonitoring() }
         model.engine = "gemini"; model.language = .english
         var fallbackCalls = 0
-        model.testFallback = { _ in fallbackCalls += 1; return "Please retain the existing settings." }
-        let unsolicited = "Please retain the existing settings. They are already optimal."
-        model.testTranslation = { _ in unsolicited }; model.input = "请保留原有设置。"
+        model.testFallback = { _ in fallbackCalls += 1; return "Fallback." }
+        for (source, candidate) in candidates {
+            model.testTranslation = { _ in candidate }; model.input = source
+            model.begin(insert: false); try await settle(model)
+            check(model.output == candidate && !model.isError && !model.status.contains("核对"), "completed provider output has no review notice")
+        }
+        check(fallbackCalls == 0, "quality differences never request a second translation")
+        model.testTranslation = { _ in throw BridgeError.message("Gemini 翻译服务返回 503。") }
+        model.testFallback = { _ in "Please run 30 times." }; model.input = "请运行20次。"
         model.begin(insert: false); try await settle(model)
-        check(model.output == unsolicited && model.status.contains("核对") && model.status.contains("未自动"), "a short added assertion remains visible for review and cannot trigger automatic delivery")
-        check(fallbackCalls == 0, "an uncertain result does not force another translation request")
-        model.testTranslation = { _ in "Delete the files." }; model.testFallback = { _ in "Delete the files." }
-        model.input = "不要删除文件。"; model.begin(insert: false); try await settle(model)
-        check(model.isError && model.output.isEmpty && model.input == "不要删除文件。", "two semantically conflicting routes preserve the draft without publishing a usable result")
-        model.testTranslation = { _ in "Please run 30 times." }; model.testFallback = { _ in "Please run 30 times." }
-        model.input = "请运行20次。"; model.begin(insert: false); try await settle(model)
-        check(model.isError && model.output.isEmpty, "changed source numbers prevent use of the assembled translation")
-        model.testTranslation = { _ in "Explain config.json" }; model.testFallback = { _ in "Explain config.json" }
-        model.input = "请解释 `config.json`。"; model.begin(insert: false); try await settle(model)
-        check(model.isError && model.output.isEmpty, "invented duplicate filenames cannot pass reassembly")
+        check(model.output == "Please run 30 times." && !model.isError && model.status.contains("系统翻译"), "a real service failure still uses system translation without quality review")
+        model.testTranslation = { _ in "  " }; model.testFallback = { _ in "  " }; model.input = "保留草稿"
+        model.begin(insert: false); try await settle(model)
+        check(model.isError && model.input == "保留草稿" && model.output.isEmpty, "empty service results preserve the draft")
 
         let pipeline = ReplyPipeline(incremental: false) { _ in "这个值是稳定的。它已经通过验证。" }
-        var incoming = "", status = ""
+        var incoming = "", status = "", replyFallbackCalls = 0
+        pipeline.fallback = { _ in replyFallbackCalls += 1; return "备用译文。" }
         pipeline.onTranslation = { _, _, text, _ in incoming = text }
         pipeline.onStatus = { text, _ in status = text }
         pipeline.observe(conversation: "quality", messages: [.init(ordinal: 2, author: .assistant, text: "The value is stable.")], responseComplete: true, now: 0)
         let end = ContinuousClock.now.advanced(by: .seconds(3))
         while pipeline.busy, ContinuousClock.now < end { try await Task.sleep(for: .milliseconds(2)) }
-        check(!incoming.isEmpty && status.contains("核对"), "uncertain incoming Chinese is visible with a review notice instead of stopping source acquisition")
+        check(incoming == "这个值是稳定的。它已经通过验证。" && !status.contains("核对") && replyFallbackCalls == 0, "incoming translations are displayed without a semantic review notice")
         pipeline.cancel()
 
-        let recovery = ReplyMonitor(); recovery.watching = true
-        recovery.testTranslation = { _ in "已有中文。" }
-        for _ in 0..<40 { recovery.handleReadFailure(BridgeError.message("Synthetic temporary AX error")) }
-        check(recovery.watching, "temporary capture failures keep monitoring recoverable beyond five attempts")
-        recovery.ingest(.init(conversation: "https://claude.ai/chat/recovery", messages: [.init(ordinal: 2, author: .assistant, text: "Recovered reply.")], foundTranscript: true, responseComplete: true))
-        check(recovery.watching, "a successful snapshot resumes normal reading")
-        recovery.stop(); recovery.handleReadFailure(BridgeError.message("Synthetic late error"))
-        check(!recovery.watching, "late capture errors never restart explicitly stopped reading")
-        print("\(count) translation quality checks; \(failures) failed")
+        var recoveryCalls = 0
+        do {
+            let result = try await SystemTranslationProtection.translate("Ask Gemini now.", toChinese: true) { _ in
+                recoveryCalls += 1; return "现在问问双子座。"
+            }
+            check(result == "现在问问双子座。" && recoveryCalls == 2, "plain system recovery is not rejected by a literal quality gate")
+        } catch { check(false, "plain system recovery is not rejected by a literal quality gate") }
+        print("\(count) translation quality removal checks; \(failures) failed")
         if failures > 0 { exit(1) }
     }
 }

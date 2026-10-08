@@ -161,13 +161,11 @@ import Foundation
         check(earlyChinese == "中文起始。 " && !ready && immediateOriginal == first + "A continuation." && chinese == "中文起始。 后续中文。" && requests == 2,
               "stable Chinese still arrives before completion and later slices continue the same paragraph")
         pipeline.cancel()
-        var rejected = false
-        do {
-            _ = try await TranslationContext.$source.withValue("Synthetic statistical context, never output.") {
-                try await TextTranslation.run("Honest error") { _ in "真实误差\n\n" + String(repeating: "不要把周围正文加入表头。", count: 30) }
-            }
-        } catch { rejected = error.localizedDescription.contains("单元格") }
-        check(rejected, "a table label response containing a whole context paragraph is rejected instead of displayed")
+        let returnedCell = "真实误差\n\n" + String(repeating: "不要把周围正文加入表头。", count: 30)
+        let expandedCell = try await TranslationContext.$source.withValue("Synthetic statistical context, never output.") {
+            try await TextTranslation.run("Honest error") { _ in returnedCell }
+        }
+        check(expandedCell == returnedCell, "table cell output is not rejected by a length-based quality gate")
         let legitimateCell = try await TranslationContext.$source.withValue("Statistical context") {
             try await TextTranslation.run("Spread") { _ in "离散\n程度" }
         }

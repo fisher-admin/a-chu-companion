@@ -12,60 +12,14 @@ import CryptoKit
         let origin = CLIDeliveryOrigin(pid: 40, tty: "ttys003", started: "Mon Oct 5 11:59:00 2026", tag: "abcdef123456abcdef12")
         let footer = "A畜伴侣 CLI · aaaaaa · project · 输入 abcdef123456abcdef12"
         let empty = "Claude Code\nPrevious answer.\n────────────────\n❯ \n────────────────\n" + footer + "\n? for shortcuts"
-        check(CLIPromptPolicy.prompt(screen: empty, binding: binding, origin: origin)?.isEmpty == true, "current footer with an empty CLI composer permits a verified input binding")
-        let blankRows = String(repeating:"\n    ",count:40)
-        check(CLIPromptPolicy.prompt(screen:empty+blankRows,binding:binding,origin:origin)?.isEmpty == true,"unused blank terminal rows after the footer do not hide the current empty input surface")
-        check(CLIPromptPolicy.prompt(screen:empty+"\nfisher@host %"+blankRows,binding:binding,origin:origin)==nil,"trailing blank rows cannot turn a shell prompt into the Claude input surface")
-        check(CLIPromptPolicy.prompt(screen: empty, binding: "cli-" + String(repeating:"b",count:64), origin: origin) == nil, "a different session marker never authorizes input")
-        check(CLIPromptPolicy.prompt(screen: empty.replacingOccurrences(of:"abcdef123456abcdef12",with:"999999123456abcdef12"), binding: binding, origin: origin) == nil, "a restarted process footer cannot reuse the previous target")
-        check(CLIPromptPolicy.prompt(screen: empty + "\nfisher@host %", binding: binding, origin: origin) == nil, "a shell prompt after Claude's scrollback is not an input destination")
-        check(CLIPromptPolicy.prompt(screen: empty + "\nAllow tool?\n1. Yes\n2. No", binding: binding, origin: origin) == nil, "permission menus cannot receive translated prose")
-        check(CLIPromptPolicy.prompt(screen: "❯\n"+footer+"\n❯\n"+footer, binding: binding, origin: origin) == nil, "ambiguous mixed panes are rejected rather than guessed")
-        let pasted = empty.replacingOccurrences(of:"❯ ",with:"❯ Hello.")
-        check(CLIPromptPolicy.receipt(screen:pasted,binding:binding,origin:origin,text:"Hello.") == .confirmed, "short pasted text is verified before sending")
-        check(CLIPromptPolicy.receipt(screen:pasted+blankRows,binding:binding,origin:origin,text:"Hello.") == .confirmed,"a padded native terminal still verifies exact pasted text")
-        let longSingle = String(repeating:"abcdefghij",count:20) + "🙂"
-        let visualRows = stride(from:0,to:longSingle.count,by:10).map { offset in
-            let start=longSingle.index(longSingle.startIndex,offsetBy:offset)
-            let end=longSingle.index(start,offsetBy:10,limitedBy:longSingle.endIndex) ?? longSingle.endIndex
-            return String(longSingle[start..<end])
-        }
-        let tallInput = empty.replacingOccurrences(of:"❯ ",with:"❯ "+visualRows.joined(separator:"\n  "))
-        check(CLIPromptPolicy.receipt(screen:tallInput,binding:binding,origin:origin,text:longSingle) == .confirmed,"single-line soft wrapping beyond twelve display rows retains an exact receipt")
-        let wrappedFooter = pasted.replacingOccurrences(of:footer,with:"A畜伴侣 CLI · aaaaaa · project · 输\n入 abcdef123456abcdef12")
-        check(CLIPromptPolicy.receipt(screen:wrappedFooter,binding:binding,origin:origin,text:"Hello.") == .confirmed,"a narrowly wrapped current footer keeps the original session and process identity")
-        let spaced = empty.replacingOccurrences(of:"❯ ",with:"❯ Hello. ")
-        check(CLIPromptPolicy.receipt(screen:spaced,binding:binding,origin:origin,text:"Hello.") == .mismatch,"a genuine extra trailing draft space is never erased to manufacture a receipt")
-        let selection = "Do you want to proceed?\n❯ 1. Yes\n  2. No\n"+footer+"\nEnter to confirm · Esc to cancel"
-        check(CLIPromptPolicy.prompt(screen:selection,binding:binding,origin:origin)==nil,"a numbered choice cursor is not a Claude message composer")
-        check(CLIPromptPolicy.receipt(screen:pasted+"\nctrl+g to edit in editor",binding:binding,origin:origin,text:"Hello.") == .confirmed,"a recognized CLI editor hint does not block exact input verification")
-        check(CLIPromptPolicy.receipt(screen:pasted+"\nctrl+g to execute unknown command",binding:binding,origin:origin,text:"Hello.") == .mismatch,"unknown text after the footer remains a boundary")
         let agentsHint = "⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
-        let agentsInput = empty.replacingOccurrences(of:"? for shortcuts",with:agentsHint)
-        check(CLIPromptPolicy.prompt(screen:agentsInput,binding:binding,origin:origin)?.isEmpty == true,"the reported auto-mode and agents hint permits binding the current empty input")
-        let agentsSuggestion = agentsInput.replacingOccurrences(of:"❯ ",with:"❯ Try create a utility script")
-        check(CLIPromptPolicy.prompt(screen:agentsSuggestion,binding:binding,origin:origin)?.text == "Try create a utility script","the reported hint does not block a suggested input")
-        let agentsPasted = agentsInput.replacingOccurrences(of:"❯ ",with:"❯ Hello.")
-        check(CLIPromptPolicy.receipt(screen:agentsPasted,binding:binding,origin:origin,text:"Hello.") == .confirmed,"the reported combined hint permits an exact paste receipt")
-        check(CLIPromptPolicy.prompt(screen:agentsInput.replacingOccurrences(of:" · ← for agents",with:"\n← for agents"),binding:binding,origin:origin)?.isEmpty == true,"a separately rendered agents shortcut remains recognized")
-        check(CLIPromptPolicy.prompt(screen:agentsInput.replacingOccurrences(of:"⏵⏵",with:"▶▶"),binding:binding,origin:origin)?.isEmpty == true,"the alternate solid-triangle mode glyph preserves the same known hint")
-        check(CLIPromptPolicy.prompt(screen:agentsInput.replacingOccurrences(of:"← for agents",with:"← execute unknown command"),binding:binding,origin:origin)==nil,"a recognized mode does not authorize an unknown trailing shortcut")
-        check(CLIPromptPolicy.prompt(screen:agentsInput+"\nfisher@host %",binding:binding,origin:origin)==nil,"combined hints cannot hide a following shell prompt")
-        let agentsMenu = "Do you want to proceed?\n❯ 1. Yes\n  2. No\n"+footer+"\n"+agentsHint
-        check(CLIPromptPolicy.prompt(screen:agentsMenu,binding:binding,origin:origin)==nil,"combined hints never turn a numbered choice menu into an input composer")
-        check(CLIPromptPolicy.receipt(screen:"❯ Previous user question\nPrevious answer\n"+pasted,binding:binding,origin:origin,text:"Hello.") == .confirmed,"old question prompts above the current composer separator do not invalidate its receipt")
-        let literalBorder = empty.replacingOccurrences(of:"❯ ",with:"❯ Keep this border\n  ───")
-        check(CLIPromptPolicy.receipt(screen:literalBorder,binding:binding,origin:origin,text:"Keep this border\n───") == .confirmed,"literal border characters inside the payload survive input parsing")
-        let multiline = empty.replacingOccurrences(of:"❯ ",with:"❯ First line.\n  Second line.")
-        check(CLIPromptPolicy.receipt(screen:multiline,binding:binding,origin:origin,text:"First line.\nSecond line.") == .confirmed, "multiline text is compared without visual continuation indentation")
         let table = "| A | B |\n|---|---|\n| 1 | 2 |"
-        let tableScreen = empty.replacingOccurrences(of:"❯ ",with:"❯ " + table.replacingOccurrences(of:"\n",with:"\n  "))
-        check(CLIPromptPolicy.receipt(screen:tableScreen,binding:binding,origin:origin,text:table) == .confirmed, "table rows and delimiters survive input verification")
-        let collapsed = empty.replacingOccurrences(of:"❯ ",with:"❯ [Pasted text #1 +120 lines]")
-        check(CLIPromptPolicy.receipt(screen:collapsed,binding:binding,origin:origin,text:String(repeating:"long text",count:200)) == .collapsed, "collapsed paste is distinguished from an exact content receipt")
-        check(CLIPromptPolicy.receipt(screen:pasted,binding:binding,origin:origin,text:"Hello. extra") == .mismatch, "partial or truncated pasted text cannot be automatically submitted")
-        check(CLIPromptPolicy.prompt(screen:empty.replacingOccurrences(of:"❯ ",with:"❯ ! pwd"),binding:binding,origin:origin)?.isEmpty == false, "an existing shell-mode draft is not an empty composer")
-        check(CLIPromptPolicy.prompt(screen:empty.replacingOccurrences(of:"❯ ",with:"❯ /config"),binding:binding,origin:origin)?.isEmpty == false, "existing slash commands cannot be overwritten")
+        check(CLIPromptPolicy.footer(screen:empty,binding:binding,origin:origin) != nil,"a strong footer associates the reader independently of input contents")
+        check(CLIPromptPolicy.footer(screen:empty+"\nUnknown hint",binding:binding,origin:origin) != nil,"unknown layout text does not gate read identity or manual sending")
+        check(CLIPromptPolicy.footer(screen:empty,binding:"cli-other",origin:origin) == nil,"a different session is not selected for reading")
+        check(CLIPromptPolicy.footer(screen:empty.replacingOccurrences(of:origin.tag,with:"unknown"),binding:binding,origin:origin) == nil,"a different process marker does not establish a read association")
+        check(CLIPromptPolicy.footer(screen:empty+"\n"+footer,binding:binding,origin:origin) == nil,"multiple visible read markers are not guessed")
+        check(CLIPromptPolicy.footer(screen:empty.replacingOccurrences(of:footer,with:"A畜伴侣 CLI · aaaaaa · project · 输\n入 "+origin.tag),binding:binding,origin:origin) != nil,"wrapped identity still associates the reader")
         let process = CLIProcessRecord(pid:40,parent:20,group:30,foreground:30,tty:"ttys003",uid:getuid(),started:origin.started,command:"/synthetic/claude")
         check(process.matches(origin), "live foreground process and creation time validate the captured CLI origin")
         var nativeTitle = process; nativeTitle.command = "Claude"
@@ -95,12 +49,12 @@ import CryptoKit
         var pasteMode = "plain", replaceBoard = false, redrawReads = 0
         var env = CLITargetBridge.Environment()
         env.trusted = { true }; env.alive = { _ in true }; env.screen = { _ in if redrawReads > 0 { redrawReads -= 1; return nil }; return screen }; env.live = { _ in live }
-        env.focused = { _, _ in focused }; env.companionActive = { true }; env.activate = { _ in }; env.board = board
+        env.focused = { _, _ in focused }; env.activate = { _ in }; env.board = board
         env.key = { key, _, _ in
             events.append(key)
             if key == 9 {
                 let agentsFooter = screen.hasSuffix(agentsHint)
-                let previousPrompt = CLIPromptPolicy.prompt(screen:screen,binding:binding,origin:verifiedOrigin)?.text ?? ""
+                let previousPrompt = "Existing displayed text"
                 let inserted = pasteMode == "collapsed" ? "[Pasted text #1 +120 lines]" : (pasteMode == "append" ? previousPrompt : "") + board.string(forType:.string)!
                 screen = verifiedEmpty.replacingOccurrences(of:"❯ ",with:"❯ "+inserted.replacingOccurrences(of:"\n",with:"\n  "))
                 if agentsFooter {screen=screen.replacingOccurrences(of:"? for shortcuts",with:agentsHint)}
@@ -114,44 +68,31 @@ import CryptoKit
         let driver = CLITargetBridge(environment:env)
         let bound = try driver.bind(surface:surface,session:binding,origin:verifiedOrigin)
         board.clearContents(); board.setString("Original clipboard",forType:.string)
-        let sent = try await driver.deliver("Hello.",to:bound,autoSend:true,current:{current})
-        check(sent == .sendKeyPressed && events == [9,36],"exact single-line paste sends once using the frozen session")
-        check(board.string(forType:.string)=="Original clipboard","a successful CLI paste restores the previous clipboard")
-        screen=verifiedEmpty.replacingOccurrences(of:"? for shortcuts",with:agentsHint);events=[]
-        do {
-            let agentBound=try driver.bind(surface:surface,session:binding,origin:verifiedOrigin)
-            let agentSent=try await driver.deliver("Hello.",to:agentBound,autoSend:true,current:{current})
-            check(agentSent == .sendKeyPressed && events == [9,36],"the screenshot layout binds and sends a short translation exactly once")
-        } catch {check(false,"the screenshot layout must bind before the normal paste and Return path")}
-        screen=verifiedEmpty; events=[]
-        let inserted = try await driver.deliver("Hello.",to:bound,autoSend:false,current:{current})
-        check(inserted == .inserted && events == [9],"turning off automatic send still pastes once without Return")
-        events=[]
-        do { _ = try await driver.deliver("Hello.",to:bound,autoSend:false,current:{current});check(false,"repeated fill rejected") }
-        catch {check(events.isEmpty,"an unchanged received translation cannot be pasted a second time")}
-        screen=verifiedEmpty; events=[]
-        let multiple = try await driver.deliver("First line.\nSecond line.",to:bound,autoSend:true,current:{current})
-        check(multiple == .inserted && events == [9],"multiline delivery is preserved without guessing Enter mode")
-        screen=verifiedEmpty; events=[]; pasteMode="collapsed"
-        let collapse = try await driver.deliver(String(repeating:"long ",count:300),to:bound,autoSend:true,current:{current})
-        check(collapse == .collapsed && events == [9],"a collapsed long paste is never retried or automatically sent")
-        events=[]
-        do { _ = try await driver.deliver(String(repeating:"long ",count:300),to:bound,autoSend:true,current:{current});check(false,"repeated collapsed fill rejected") }
-        catch {check(events.isEmpty,"an unchanged collapsed paste cannot be inserted again by a later fill action")}
-        screen=verifiedEmpty; events=[]; pasteMode="redraw"
-        do {
-            let redraw=try await driver.deliver("Hello.",to:bound,autoSend:true,current:{current})
-            check(redraw == .sendKeyPressed && events == [9,36],"temporary terminal redraw waits for exact input instead of abandoning the paste")
-        } catch {check(false,"temporary terminal redraw must recover within its receipt window")}
-        for mode in ["exit","switch","retire"] {
-            screen=verifiedEmpty; events=[]; pasteMode=mode; live=true; focused=true; current=true; redrawReads=0
-            do { _ = try await driver.deliver("Hello.",to:bound,autoSend:true,current:{current}); check(false,"after-paste \(mode) rejected") }
-            catch { check(events == [9],"after-paste \(mode) blocks Return and duplicate paste") }
+        for text in ["Hello.", "First line.\nSecond line.", table, "/explain", "! Explain this example.", String(repeating:"long ",count:300)] {
+            events=[];screen=verifiedEmpty
+            let sent=try await driver.deliver(text,to:bound,autoSend:true,current:{current})
+            check(sent == .sendKeyPressed && events == [9,36],"manual destination receives one paste and Return for every text shape")
         }
-        screen=verifiedEmpty; events=[]; pasteMode="plain"; live=true; focused=true; current=true; replaceBoard=true
-        _ = try await driver.deliver("Hello.",to:bound,autoSend:false,current:{current})
-        check(board.string(forType:.string)=="User's newer clipboard","a newer user clipboard is not overwritten by restoration")
+        check(board.string(forType:.string)=="Original clipboard","a successful paste restores the previous clipboard")
+        screen=verifiedEmpty;events=[]
+        let inserted=try await driver.deliver("Hello.",to:bound,autoSend:false,current:{current})
+        check(inserted == .inserted && events == [9],"turning off automatic send pastes once without Return")
         let suggestion=verifiedEmpty.replacingOccurrences(of:"❯ ",with:"❯ Try explaining this code")
+        for mode in ["collapsed","redraw","append"] {
+            screen=suggestion;events=[];pasteMode=mode
+            let result=try await driver.deliver("Hello.",to:bound,autoSend:true,current:{current})
+            check(result == .sendKeyPressed && events == [9,36],"rendered contents and receipt shape never gate the manually chosen input")
+        }
+        for mode in ["switch","retire"] {
+            screen=verifiedEmpty;events=[];pasteMode=mode;focused=true;current=true
+            let result=try await driver.deliver("Hello.",to:bound,autoSend:true,current:{current})
+            if case .submitFailed = result {check(events == [9],"a changed physical focus or replaced connection stops Return after one paste")}
+            else {check(false,"a changed physical focus or replaced connection stops Return after one paste")}
+        }
+        focused=true;current=true;events=[];pasteMode="plain";replaceBoard=true
+        _=try await driver.deliver("Hello.",to:bound,autoSend:false,current:{current})
+        check(board.string(forType:.string)=="User's newer clipboard","a newer clipboard is not overwritten by restoration")
+        replaceBoard=false
         screen=suggestion; events=[]; replaceBoard=false
         do { _ = try driver.bind(surface:surface,session:binding,origin:verifiedOrigin);check(true,"visible CLI prompt suggestions do not prevent binding the verified input window") }
         catch { check(false,"visible CLI prompt suggestions must not be mistaken for a blocking draft") }
@@ -162,7 +103,7 @@ import CryptoKit
         screen=verifiedEmpty.replacingOccurrences(of:"❯ ",with:"❯ Existing draft");events=[];pasteMode="append"
         do {
             let result=try await driver.deliver("Hello.",to:bound,autoSend:true,current:{current})
-            check(result == .unconfirmed && events == [9],"text appended to actual input is not retried or submitted as an exact translation")
+            check(result == .sendKeyPressed && events == [9,36],"rendered input contents do not override the user-selected destination")
         } catch {check(false,"existing display text is allowed through paste and checked using actual receipt")}
 
         screen=suggestion; events=[]; pasteMode="plain";live=true;focused=true;current=true
@@ -183,7 +124,7 @@ import CryptoKit
         model.connectCapturedTarget(captured)
         check(!model.showCLIPicker,"shortcut capture must wait for its current footer without asking the user to choose a CLI session")
         try await client()
-        check(model.hasTarget && model.isCLIConnection && model.bridge.selected==binding,"shortcut surface pairs only the matching strong footer with its live CLI report")
+        check(model.hasTarget && model.isCLIConnection && model.bridge.selected==binding,"shortcut sender is independent and a matching footer associates only the reader")
         check(model.hasTarget && model.cliConnectionHint.isEmpty,"suggestion text does not leave a stale nonempty-input error after shortcut binding")
         if !model.hasTarget { screen=verifiedEmpty;model.connectCapturedTarget(captured) }
         try await client("delta")
@@ -195,6 +136,20 @@ import CryptoKit
         while model.busy && Date()<deadline { try await Task.sleep(for:.milliseconds(10)) }
         check(!model.busy && model.output=="Hello." && events==[9,36],"Chinese input follows translation through the actual CLI delivery controller")
         check(model.input.isEmpty && model.hasTarget,"successful sending clears the Chinese draft while retaining the CLI binding")
+        for (source, translation) in [
+            ("请运行20次。", "Please run 30 times."),
+            ("请保留原有设置。", "Please retain the settings. They are fine."),
+            ("结果可靠吗？", "The result is reliable."),
+            ("请保留原有设置。", "请保留原有设置。")
+        ] {
+            screen=verifiedEmpty;events=[];model.input=source
+            model.testFallback={_ in translation}
+            model.testTranslation={_ in translation};model.begin(insert:true)
+            let completion=Date().addingTimeInterval(3)
+            while model.busy && Date()<completion {try await Task.sleep(for:.milliseconds(5))}
+            check(!model.busy && model.output==translation && events==[9,36] && model.input.isEmpty,
+                "translation quality heuristics do not block automatic CLI paste and Return")
+        }
         model.testTranslation={_ in throw BridgeError.message("Gemini 翻译服务返回 503。")}
         var fallbackCalls=0
         model.testFallback={_ in fallbackCalls += 1; return "Hello."}
@@ -231,10 +186,11 @@ import CryptoKit
         check(events.isEmpty && model.output=="Hello." && model.input=="你好" && model.isError && fallbackCalls==beforeDeliveryFailure+1,"focus lost after system translation retains the candidate without repeating translation or terminal input")
         focused=true;model.testFallback={_ in "Hello. 123"};model.input="你好";model.begin(insert:true)
         while model.busy {try await Task.sleep(for:.milliseconds(5))}
-        check(events.isEmpty && model.output.isEmpty && model.input=="你好" && model.isError,"system fallback still rejects invented numbers before delivery")
+        check(events==[9,36] && model.output=="Hello. 123" && model.input.isEmpty && !model.isError,"system fallback sends without a numeric quality gate")
         model.testFallback={_ in "Hello."};screen=verifiedEmpty;events=[];live=false;model.input="你好"
         model.begin(insert:true)
-        check(events.isEmpty && model.input=="你好" && !model.busy,"an expired CLI input binding still refuses automatic fallback delivery")
+        while model.busy {try await Task.sleep(for:.milliseconds(5))}
+        check(events==[9,36] && model.input.isEmpty,"a missing read-process report does not gate the manually selected input")
         live=true;model.testFallback=nil
         screen=verifiedEmpty; events=[]
         var delayed:CheckedContinuation<String,Error>?
@@ -243,13 +199,13 @@ import CryptoKit
         model.bridge.select("cli-"+String(repeating:"b",count:64))
         delayed?.resume(returning:"Hello.");delayed=nil
         while model.busy { try await Task.sleep(for:.milliseconds(10)) }
-        check(events.isEmpty && model.output=="Hello." && model.input=="你好","switching selected CLI sessions while translating cannot send the late result")
-        check(!model.hasTarget && model.replies.watching,"a different selected source stays readable without inheriting another pane")
+        check(events==[9,36] && model.output=="Hello." && model.input.isEmpty,"switching the reader does not change or stop the manually pinned sender")
+        check(model.hasTarget && model.replies.watching,"a different read source never replaces the manually chosen input")
         screen=verifiedEmpty.replacingOccurrences(of:validTag,with:"waiting-for-footer")
         model.connectCapturedTarget(captured)
         try await client("read-only")
         model.bridge.select(binding)
-        check(!model.hasTarget,"a captured surface cannot send before a verifiable CLI report and matching current footer")
+        check(model.hasTarget,"a captured surface can send independently of report timing or footer text")
         screen=verifiedEmpty
         try await client("refresh")
         check(model.hasTarget,"a late valid identity must bind the captured surface of the same selected session without another shortcut or selection")

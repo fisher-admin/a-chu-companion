@@ -81,18 +81,14 @@ import AppKit
         check(SystemTranslationProtection.corrected("界面支持功能选择。", source: "The UI supports feature selection.") == "界面支持功能选择。", "software features do not inherit an inferred statistical domain")
         var negative = false
         do {
-            _ = try await TranslationFidelity.$target.withValue(.foreign(.english)) {
-                try await TextTranslation.run("负零点三") { _ in "-0.3" }
-            }
+            _ = try await TextTranslation.run("负零点三") { _ in "-0.3" }
             negative = true
         } catch { }
         check(negative, "a translated negative decimal is not an invented Markdown list")
-        var listRejected = false
-        do { try TranslationFidelity.validate(source: "请解释。", translation: "- First\n- Second", target: .foreign(.english)) }
-        catch { listRejected = true }
-        check(listRejected, "real invented Markdown lists remain rejected")
+        let list = try await TextTranslation.run("请解释。") { _ in "- First\n- Second" }
+        check(list == "- First - Second", "provider list formatting does not trigger a quality gate")
         var chineseList = false
-        do { try TranslationFidelity.validate(source: "步骤：\n1、生成数据\n2、选择特征", translation: "Steps:\n1. Generate data\n2. Select features", target: .foreign(.english)); chineseList = true }
+        do { chineseList = try await TextTranslation.run("步骤：\n1、生成数据\n2、选择特征") { _ in "Steps:\n1. Generate data\n2. Select features" } == "Steps:\n1. Generate data\n2. Select features" }
         catch { }
         check(chineseList, "Chinese enumeration without spaces remains a source list")
 

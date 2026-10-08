@@ -29,7 +29,7 @@ struct MainView: View {
                 }.labelsHidden().frame(width: 100).disabled(model.busy || replies.translating)
                 Spacer(minLength: 8)
                 Circle().fill(model.hasTarget || replies.watching ? .green : .orange).frame(width: 7, height: 7)
-                Text(model.hasTarget ? model.targetName + (replies.watching ? " · 正在读取" : " · 读取已停止") : (replies.watching ? replies.sourceName + " · 正在读取（只读）" : "未连接 Claude"))
+                Text(model.hasTarget ? model.targetName + (replies.watching ? " · 正在读取" : " · 已连接输入区") : (replies.watching ? replies.sourceName + " · 正在读取（只读）" : "未连接 Claude"))
                     .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).help(model.hasTarget ? model.targetName : replies.sourceName)
                 if !model.hasTarget || model.isCLIConnection {
                     Button("连接 CLI") { model.connectCLI(releaseSelection: false) }
@@ -85,7 +85,7 @@ struct MainView: View {
                                 Text("消息译成所选语言，回复自动译回中文。\n在这里写消息、看回复，继续同一个对话。")
                                     .font(.system(size: 13)).foregroundStyle(.secondary).lineSpacing(5)
                                 if model.isCLIConnection {
-                                    Label(model.hasTarget ? "译文自动填入原终端；多行或折叠长文需在终端确认发送" : "在终端输入区按 ⌃⌥E 绑定自动填入；也可复制译文", systemImage: "terminal")
+                                    Label(model.hasTarget ? "译文填入你选定的输入区，并按发送设置自动回车" : "在终端输入区按 ⌃⌥E 连接；也可复制译文", systemImage: "terminal")
                                         .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 4)
                                 } else if !model.hasTarget {
                                     Label("点击 Claude 输入框，再按 ⌃⌥E 连接", systemImage: "link")
@@ -181,7 +181,7 @@ struct MainView: View {
                             }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(!model.hasTarget || model.input.count > InputPolicy.limit || model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                                .help(model.hasTarget ? "翻译后填入已核对的输入区" : "先在 CLI 或 Claude 输入区按 ⌃⌥E 连接，输入绑定成功后可用")
+                                .help(model.hasTarget ? "翻译完成后填入你指定的输入区，并按设置发送" : "先在 CLI 或 Claude 输入区按 ⌃⌥E 连接")
                     }
                 }.controlSize(.small)
             }.padding(.horizontal, 18).padding(.vertical, 12)

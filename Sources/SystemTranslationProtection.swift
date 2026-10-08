@@ -3,7 +3,7 @@ import Foundation
 /// macOS system translation accepts no instructions or glossary, so names and
 /// literals are shielded with placeholders that measured as surviving all four
 /// language pairs in both directions, then restored verbatim. Any missing or
-/// duplicated placeholder discards the protected attempt entirely.
+/// duplicated placeholder uses a plain translation attempt instead.
 enum SystemTranslationProtection {
     struct Masked: Equatable {
         let text: String
@@ -90,21 +90,6 @@ enum SystemTranslationProtection {
         if masked.replacements.isEmpty { return prose(try await translate(text)) }
         if let restored = restore(prose(try await translate(masked.text)), masked) { return restored }
         let plain = try await translate(text)
-        // A provider that loses placeholders gets one unmasked attempt, but it
-        // must still retain every original literal. Never publish altered names.
-        for literal in Set(masked.replacements.values) {
-            guard plain.components(separatedBy: literal).count == text.components(separatedBy: literal).count else {
-                throw BridgeError.message("系统译文未保留原文中的名称或字面量，原文已保留，请重试。")
-            }
-        }
-        // Remask validated literals before converting script or correcting prose.
-        var protected = plain
-        for (token, literal) in masked.replacements.sorted(by: { $0.value.count > $1.value.count }) {
-            if let range = protected.range(of: literal) { protected.replaceSubrange(range, with: token) }
-        }
-        guard let restored = restore(prose(protected), masked) else {
-            throw BridgeError.message("系统译文字面量无法完整恢复，原文已保留，请重试。")
-        }
-        return restored
+        return prose(plain)
     }
 }

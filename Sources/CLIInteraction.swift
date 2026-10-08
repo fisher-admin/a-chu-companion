@@ -142,12 +142,10 @@ enum CLIInteractionPolicy {
         observe(screen:notice.original,identityValid:true,matchingFooter:false,now:lastRead ?? 0)
     }
     private func translated(_ text:String) async throws -> String {
-        try await TranslationFidelity.$target.withValue(.chinese) {
-            try await TextTranslation.runProtected(text) { [self] part in
-                if let translate {return try await translate(part)}
-                let session=try await systemSession()
-                return try await SystemTranslationProtection.translate(part,toChinese:true) {try await session.translate($0).targetText}
-            }
+        try await TextTranslation.runProtected(text) { [self] part in
+            if let translate {return try await translate(part)}
+            let session=try await systemSession()
+            return try await SystemTranslationProtection.translate(part,toChinese:true) {try await session.translate($0).targetText}
         }
     }
     private func systemSession() async throws -> TranslationSession {

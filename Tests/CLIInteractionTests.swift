@@ -34,7 +34,7 @@ import AppKit
         check(CLIInteractionPolicy.notice(screen:timedSpinner) != nil && CLIInteractionPolicy.notice(screen:timedSpinner)?.identity == CLIInteractionPolicy.notice(screen:updatedSpinner)?.identity,"spinner glyph and counters do not constantly restart the translation")
         let binding="cli-"+String(repeating:"a",count:64)
         let origin=CLIDeliveryOrigin(pid:40,tty:"ttys003",started:"Mon Oct 5 11:59:00 2026",tag:"abcdef123456abcdef12")
-        check(CLIPromptPolicy.prompt(screen:menu+"\n"+marker,binding:binding,origin:origin) == nil,"a visible permission choice never receives a pasted chat message")
+        check(CLIInteractionPolicy.notice(screen:menu+"\n"+marker)?.kind == .permission,"a visible permission choice remains an operational notice rather than a formal reply")
         let monitor=CLINoticeMonitor()
         var calls=0
         monitor.translate={text in calls += 1;return text == "Do you want to proceed?" ? "是否继续？" : "选项译文"}

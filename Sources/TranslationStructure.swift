@@ -12,15 +12,6 @@ enum TranslationContext {
     static func definitionText(_ text: String) -> String {
         text.replacingOccurrences(of: #"(?<!\w)(\*{1,2}|_{1,2})([^*\n]+?)\1(?!\w)"#, with: "$2", options: .regularExpression)
     }
-    static func qualifiedCellOutput(_ translated: String, original: String) -> String {
-        guard definitionText(original).lowercased() == "honest mse", let source,
-              translated.contains("无偏") || translated.contains("無偏") || translated.range(of: "unbiased", options: .caseInsensitive) != nil else { return translated }
-        let denial = #"(?i)(?<!\w)Honest\s+MSE\s+(?:is|means|denotes|is defined as|refers to)\s+[^\n]{0,160}(?:\bnot\b|\bnever\b|isn't|isn’t)[^\n.!?]{0,60}\bunbiased\b"#
-        guard definitionText(source).range(of: denial, options: .regularExpression) != nil else { return translated }
-        // This known conflict has occurred despite explicit model instructions.
-        // Preserve the named procedure, rather than inventing another property.
-        return original
-    }
     static func systemInput(_ text: String) -> String {
         guard let source, !source.isEmpty, text.count <= 80, !text.contains(where: \.isNewline) else { return text }
         let label = NSRegularExpression.escapedPattern(for: definitionText(text))

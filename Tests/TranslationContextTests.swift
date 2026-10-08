@@ -96,7 +96,7 @@ import Foundation
         }
         check(MarkdownTable.blocks(conflicting).compactMap { block -> MarkdownTable? in
             if case .table(let table) = block { return table }; return nil
-        }.first?.headers.first == "Honest MSE", "a known contradictory unbiased header retains its original technical name")
+        }.first?.headers.first == "无偏均方误差", "provider cell output is displayed without a post-translation semantic substitution")
         let accepted = try await TextTranslation.runProtected(honestTable + honestDefinition) { text in
             text == "Honest MSE" ? "诚实流程测试均方误差" : text
         }
@@ -104,7 +104,7 @@ import Foundation
         let affirmative = try await TextTranslation.runProtected(honestTable + "Honest MSE is an unbiased estimator.") { text in
             text == "Honest MSE" ? "无偏均方误差" : text
         }
-        check(affirmative.contains("无偏均方误差"), "an explicit affirmative source claim is not overridden by the conservative fallback")
+        check(affirmative.contains("无偏均方误差"), "provider cell output is retained for an affirmative source claim as well")
         let longInput = String(repeating: "Old unrelated text. ", count: 300) + "The current context concerns statistical variance.\n\n" + table
         var longContext = ""
         _ = try await TextTranslation.runProtected(longInput) { text in

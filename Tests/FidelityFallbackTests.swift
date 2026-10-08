@@ -20,14 +20,8 @@ final class FetchCounter: @unchecked Sendable {
     static func check(_ value: Bool, _ name: String) {
         precondition(value, name); count += 1; print("PASS: \(name)")
     }
-    @MainActor static func rejected(_ source: String, _ output: String, _ target: TranslationTarget?) async -> Bool {
-        do {
-            _ = try await TranslationFidelity.$target.withValue(target) { try await TextTranslation.run(source) { _ in output } }
-            return false
-        } catch { return error is TranslationFidelityError }
-    }
-    @MainActor static func accepted(_ source: String, _ output: String, _ target: TranslationTarget?) async -> Bool {
-        (try? await TranslationFidelity.$target.withValue(target) { try await TextTranslation.run(source) { _ in output } }) != nil
+    @MainActor static func accepted(_ source: String, _ output: String) async -> Bool {
+        (try? await TextTranslation.run(source) { _ in output }) != nil
     }
 
     // Reconstructed from the build58 live failure (the sent text itself was
@@ -42,37 +36,35 @@ final class FetchCounter: @unchecked Sendable {
     @MainActor static func main() async throws {
         setvbuf(stdout, nil, _IONBF, 0)
         _ = NSApplication.shared
-        let en = TranslationTarget.foreign(.english), de = TranslationTarget.foreign(.german)
 
-        // Observed failure shapes are refused before any insertion or display.
-        check(await rejected(question, english + "\n\n" + answer, en), "an answer paragraph appended to a translated research request is refused")
-        check(await rejected(question, english + " " + answer, en), "an answer appended in the same paragraph is refused rather than flattened into the request")
-        check(await rejected(question, german + "\n\n" + answer, de), "German output with an appended answer is refused despite the larger German allowance")
-        check(await rejected("请用表格比较两种流程。", "Please compare the two processes using a table.\n\n| Process | Bias |\n| --- | --- |\n| Global | High |", en), "a requested table is not invented by the translator")
-        check(await rejected("请说明结论。", "Please state the conclusion.\n\n## Conclusion\nLeakage inflates accuracy.", en), "an added heading is refused")
-        check(await rejected("请列出风险。", "Please list the risks.\n- Leakage\n- Overfitting", en), "an added list is refused")
-        check(await rejected("这个设计有效吗？", "Is this design valid? No. It leaks test information into feature selection.", en), "an English answer to a source question is refused")
-        check(await rejected("这个设计有效吗？", "Ist dieses Design gültig? Nein, es ist ungültig.", de), "a German answer to a source question is refused")
-        check(await rejected("请解释实验设计。", "Please explain the experimental design. The design compares two pipelines on pure-noise data and shows that global selection leaks.", en), "a short request followed by its answer is refused")
-        check(await rejected("The estimate is optimistic.", "这个估计是乐观的。\n\n解释：因为测试数据参与了特征筛选，所以准确率被高估，这种偏差在纯噪声数据上尤为明显，需要嵌套交叉验证才能避免。", .chinese), "a reply translation that adds its own explanation is refused")
+        // These formerly rejected shapes now pass without post-translation review.
+        check(await accepted(question, english + "\n\n" + answer), "an answer paragraph appended to a translated research request passes without quality review")
+        check(await accepted(question, english + " " + answer), "an answer appended in the same paragraph passes without quality review rather than flattened into the request")
+        check(await accepted(question, german + "\n\n" + answer), "German output with an appended answer passes without quality review despite the larger German allowance")
+        check(await accepted("请用表格比较两种流程。", "Please compare the two processes using a table.\n\n| Process | Bias |\n| --- | --- |\n| Global | High |"), "a requested table does not trigger a quality gate")
+        check(await accepted("请说明结论。", "Please state the conclusion.\n\n## Conclusion\nLeakage inflates accuracy."), "an added heading passes without quality review")
+        check(await accepted("请列出风险。", "Please list the risks.\n- Leakage\n- Overfitting"), "an added list passes without quality review")
+        check(await accepted("这个设计有效吗？", "Is this design valid? No. It leaks test information into feature selection."), "an English answer to a source question passes without quality review")
+        check(await accepted("这个设计有效吗？", "Ist dieses Design gültig? Nein, es ist ungültig."), "a German answer to a source question passes without quality review")
+        check(await accepted("请解释实验设计。", "Please explain the experimental design. The design compares two pipelines on pure-noise data and shows that global selection leaks."), "a short request followed by its answer passes without quality review")
+        check(await accepted("The estimate is optimistic.", "这个估计是乐观的。\n\n解释：因为测试数据参与了特征筛选，所以准确率被高估，这种偏差在纯噪声数据上尤为明显，需要嵌套交叉验证才能避免。"), "a reply translation that adds its own explanation passes without quality review")
 
         // Faithful translations and ordinary length differences remain accepted.
-        check(await accepted(question, english, en), "a faithful long English request is accepted")
-        check(await accepted(question, german, de), "a faithful long German request is accepted")
-        check(await accepted(question, japanese, .foreign(.japanese)), "a faithful Japanese request is accepted")
-        check(await accepted(question, korean, .foreign(.korean)), "a faithful Korean request is accepted")
-        check(await accepted("请检查。", "Bitte überprüfen Sie das.", de), "short German expansion is accepted")
-        check(await accepted("请保留原有设置。", "Bitte behalten Sie die bestehenden Einstellungen bei.", de), "a normal German sentence expansion is accepted")
-        check(await accepted("画蛇添足。", "That is gilding the lily; the extra detail spoils it.", en), "an idiom rendered by meaning is accepted")
-        check(await accepted("这个设计有效吗？", "Is this design valid?", en), "a question translated as a question is accepted")
-        check(await accepted("这个设计有效吗？", "この設計は有効ですか。", .foreign(.japanese)), "a Japanese question without a question mark is not refused")
-        check(await accepted("这个结果不是无偏估计，我们还没有做实验。", "This result is not an unbiased estimate; we have not run the experiment yet.", en), "negation and a not-yet-conducted statement pass unchanged")
-        check(await accepted("步骤：\n1、生成数据\n2、选择特征", "Steps:\n1. Generate data\n2. Select features", en), "a source list may become a Markdown list")
-        check(await accepted("The design is invalid. In pure-noise data the true accuracy is chance (about 50%).", "这个设计是无效的。在纯噪声数据中，真实准确率只是随机水平（约50%）。", .chinese), "a faithful reply translation is accepted")
-        check(await accepted("Keep this sentence.", "KEEP THIS SENTENCE.", nil), "unknown-direction identity output is accepted")
-        check(TranslationFidelity.weightedLength("中文") == 6 && TranslationFidelity.weightedLength("a  b") == 3, "script weighting counts Han characters and whitespace runs as calibrated")
+        check(await accepted(question, english), "a faithful long English request is accepted")
+        check(await accepted(question, german), "a faithful long German request is accepted")
+        check(await accepted(question, japanese), "a faithful Japanese request is accepted")
+        check(await accepted(question, korean), "a faithful Korean request is accepted")
+        check(await accepted("请检查。", "Bitte überprüfen Sie das."), "short German expansion is accepted")
+        check(await accepted("请保留原有设置。", "Bitte behalten Sie die bestehenden Einstellungen bei."), "a normal German sentence expansion is accepted")
+        check(await accepted("画蛇添足。", "That is gilding the lily; the extra detail spoils it."), "an idiom rendered by meaning is accepted")
+        check(await accepted("这个设计有效吗？", "Is this design valid?"), "a question translated as a question is accepted")
+        check(await accepted("这个设计有效吗？", "この設計は有効ですか。"), "a Japanese question without a question mark is not refused")
+        check(await accepted("这个结果不是无偏估计，我们还没有做实验。", "This result is not an unbiased estimate; we have not run the experiment yet."), "negation and a not-yet-conducted statement pass unchanged")
+        check(await accepted("步骤：\n1、生成数据\n2、选择特征", "Steps:\n1. Generate data\n2. Select features"), "a source list may become a Markdown list")
+        check(await accepted("The design is invalid. In pure-noise data the true accuracy is chance (about 50%).", "这个设计是无效的。在纯噪声数据中，真实准确率只是随机水平（约50%）。"), "a faithful reply translation is accepted")
+        check(await accepted("Keep this sentence.", "KEEP THIS SENTENCE."), "unknown-direction identity output is accepted")
 
-        // Reply reading: a failed or suspicious slice uses the local fallback.
+        // Reply reading: service failures use fallback; quality guesses do not.
         var status = ""; var chinese = ""; var fallbackCalls = 0
         let pipeline = ReplyPipeline(incremental: false) { _ in throw BridgeError.message("Gemini 翻译服务返回 503。服务暂时不可用，请稍后重试。") }
         pipeline.fallback = { _ in fallbackCalls += 1; return "系统中文。" }
@@ -84,11 +76,12 @@ final class FetchCounter: @unchecked Sendable {
               "a 503 reply slice is translated by the system fallback and the reason stays visible")
         let suspicious = ReplyPipeline(incremental: false) { _ in "这个估计是乐观的。\n\n解释：" + String(repeating: "因为测试数据参与了特征筛选所以被高估。", count: 6) }
         var suspiciousChinese = ""
-        suspicious.fallback = { _ in "这个估计是乐观的。" }
+        var suspiciousFallbackCalls = 0
+        suspicious.fallback = { _ in suspiciousFallbackCalls += 1; return "这个估计是乐观的。" }
         suspicious.onTranslation = { _, _, value, _ in suspiciousChinese = value }
         suspicious.observe(conversation: "suspicious", messages: [.init(ordinal: 2, author: .assistant, text: "The estimate is optimistic.")], responseComplete: true, now: 0)
         while suspicious.busy { try await Task.sleep(for: .milliseconds(5)) }
-        check(suspiciousChinese == "这个估计是乐观的。", "a reply translation with an added explanation is replaced by the fallback")
+        check(suspiciousChinese == "这个估计是乐观的。 解释：" + String(repeating: "因为测试数据参与了特征筛选所以被高估。", count: 6) && suspiciousFallbackCalls == 0, "incoming provider output is displayed without quality-triggered fallback")
         var noFallbackChinese = ""
         let plain = ReplyPipeline(incremental: false) { _ in throw BridgeError.message("服务暂时不可用") }
         plain.onTranslation = { _, _, value, _ in noFallbackChinese = value }
@@ -109,10 +102,10 @@ final class FetchCounter: @unchecked Sendable {
         model.input = question
         model.begin(insert: false)
         while model.busy { try await Task.sleep(for: .milliseconds(5)) }
-        check(model.output == english && systemCalls == 1 && model.input == question && model.history.last?.foreign == english,
-              "an appended Gemini answer is replaced by the system translation while the Chinese draft stays")
-        check(model.status.contains("系统翻译") && !model.status.contains("请检查后") && model.status.contains("Gemini"),
-              "translation-only fallback is reported without imposing an extra review step")
+        check(model.output == english + " " + answer && systemCalls == 0 && model.input == question && model.history.last?.foreign == model.output,
+              "provider output completes without quality-triggered fallback while the Chinese draft stays")
+        check(!model.status.contains("系统翻译") && !model.status.contains("核对"),
+              "translation-only completion has no extra review step")
         model.testTranslation = { _ in throw BridgeError.message("Gemini 翻译服务返回 503。服务暂时不可用，请稍后重试。") }
         model.testFallback = { _ in throw BridgeError.message("系统翻译语言尚未准备好。") }
         model.input = "请保留原有设置。"
@@ -293,6 +286,6 @@ final class FetchCounter: @unchecked Sendable {
         listener.cancel()
         check(message.contains("超时") && !message.contains("检查网络"), "a Gemini timeout is not reported as a local network failure")
 
-        print("\(count) fidelity and fallback contracts passed")
+        print("\(count) translation and fallback contracts passed")
     }
 }
