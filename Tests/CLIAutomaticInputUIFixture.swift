@@ -8,19 +8,27 @@ import CryptoKit
 @MainActor final class SyntheticCLITextView: NSTextView {
     var footer = ""
     var collapsed = false
+    var blankRows = 0
+    var checkpointURL: URL?
     var pasted = ""
     var pasteCount = 0, returnCount = 0
-    var base: String { "Claude Code synthetic surface\nPrevious synthetic answer.\n────────────────\n❯ \n────────────────\n" + footer + "\n? for shortcuts" }
-    func reset() { pasted="";pasteCount=0;returnCount=0;string=base;setSelectedRange(.init(location:0,length:0)) }
+    var base: String { "Claude Code synthetic surface\nPrevious synthetic answer.\n────────────────\n❯ \n────────────────\n" + footer + "\n? for shortcuts" + String(repeating:"\n    ",count:blankRows) }
+    func checkpoint() {
+        guard let checkpointURL, let data=try? JSONSerialization.data(withJSONObject:["synthetic":true,"pasteCount":pasteCount,"returnCount":returnCount,"pastedCharacters":pasted.count],options:[.sortedKeys]) else{return}
+        try? data.write(to:checkpointURL,options:.atomic)
+    }
+    func reset() { pasted="";pasteCount=0;returnCount=0;string=base;setSelectedRange(.init(location:0,length:0));checkpoint() }
     override func paste(_ sender: Any?) {
         pasteCount += 1; pasted = NSPasteboard.general.string(forType:.string) ?? ""
         let shown = collapsed ? "[Pasted text #1 +120 lines]" : pasted.replacingOccurrences(of:"\n",with:"\n  ")
         string = base.replacingOccurrences(of:"❯ ",with:"❯ "+shown)
+        checkpoint()
     }
     override func keyDown(with event:NSEvent) {
         if event.keyCode == 36 {
             returnCount += 1
             string = "Synthetic submitted: \(pasted)\n" + base
+            checkpoint()
         } else { super.keyDown(with:event) }
     }
 }
@@ -29,6 +37,7 @@ import CryptoKit
     var terminal: NSWindow!, panel: NSWindow!, screen: SyntheticCLITextView!
     var model:TranslatorModel!, usage = ClaudeUsageMonitor()
     let binding = "cli-"+String(repeating:"a",count:64)
+    var fullFooter = ""
     func applicationDidFinishLaunching(_ notification:Notification) {
         precondition(CompanionPreferences.simulated)
         AppMenus.install()
@@ -44,6 +53,7 @@ import CryptoKit
         let started="Mon Oct 5 11:59:00 2026"
         let tag=String(SHA256.hash(data:Data((binding+"\0"+"40"+"\0"+started).utf8)).map {String(format:"%02x",$0)}.joined().prefix(20))
         screen.footer="A畜伴侣 CLI · aaaaaa · Synthetic a · 输入 "+tag
+        fullFooter=screen.footer
         screen.reset();scroll.documentView=screen;terminal.contentView=scroll
         var env=CLITargetBridge.Environment();env.live={_ in true}
         env.focused={surface,front in front ? CLITargetBridge.focused(surface,true) : true}
@@ -52,6 +62,7 @@ import CryptoKit
         env.activate={ [weak self] _ in NSApp.activate(ignoringOtherApps:true);self?.terminal.makeKeyAndOrderFront(nil);self?.terminal.makeFirstResponder(self?.screen) }
         model=TranslatorModel(permissionCheck:{true},remoteKeyRead:{_ in "synthetic-key"},cliDelivery:CLITargetBridge(environment:env))
         let root=Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        screen.checkpointURL=root.appendingPathComponent(".build/optimization70/native-events.json")
         model.cliEntryRequest={path in
             let code=try await Task.detached {
                 let p=Process();p.executableURL=URL(fileURLWithPath:"/usr/bin/python3");p.currentDirectoryURL=root;p.arguments=["Tests/CLIDeliveryClient.py",path]
@@ -65,6 +76,7 @@ import CryptoKit
         panel.contentView=NSHostingView(rootView:VStack(spacing:0){
             HStack{
                 Button("连接模拟输入区"){self.connect()}
+                Button("首次连接（标记晚到）"){self.connectWithDelayedFooter()}
                 Button("短文场景"){self.prepare("你好",foreign:"Hello.",collapsed:false)}
                 Button("多行场景"){self.prepare("第一行。\n第二行。",foreign:"First line.\nSecond line.",collapsed:false)}
                 Button("折叠场景"){self.prepare(String(repeating:"长内容。",count:100),foreign:String(repeating:"Long text. ",count:100),collapsed:true)}
@@ -81,11 +93,18 @@ import CryptoKit
             guard let self else{return}
             let ax=AXUIElementCreateApplication(getpid())
             guard let focus=TargetBridge.elementAttribute(ax,kAXFocusedUIElementAttribute),let window=TargetBridge.elementAttribute(ax,kAXFocusedWindowAttribute) else {self.model.report("模拟表面未提供焦点",error:true);return}
-            let surface=CLITargetBridge.Surface(app:.current,window:window,focus:focus,element:focus)
-            self.model.cliCapture={surface}
+            self.model.cliCapture={try CLITargetBridge.captureSurface(app:.current,focus:focus,window:window)}
             self.model.connectCapturedTarget(.init(app:.current,element:focus,window:window,value:self.screen.string,selection:nil,conversation:nil,identity:.init(role:"AXTextArea",identifier:nil,description:nil,placeholder:nil)))
             self.panel.makeKeyAndOrderFront(nil)
 
+        }
+    }
+    func connectWithDelayedFooter(){
+        model.bridge.stop();screen.footer="";screen.blankRows=40;screen.collapsed=false;screen.reset()
+        model.testTranslation={_ in "Hello."};model.input="你好"
+        connect()
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.8){ [weak self] in
+            guard let self else{return};self.screen.footer=self.fullFooter;self.screen.reset()
         }
     }
     func applicationWillTerminate(_ notification:Notification){model.bridge.stop();model.cancel();model.stopPermissionMonitoring();usage.stop()}

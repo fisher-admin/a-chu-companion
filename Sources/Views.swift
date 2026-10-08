@@ -43,6 +43,13 @@ struct MainView: View {
                     .padding(.horizontal, 7).padding(.vertical, 4)
                     .background(Color.primary.opacity(0.05), in: Capsule())
             }.padding(.horizontal, 20).padding(.vertical, 8)
+            if !model.cliConnectionHint.isEmpty && !model.hasTarget {
+                Label(model.cliConnectionHint, systemImage: "link")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20).padding(.bottom, 6)
+            }
             HealthSummaryView(health: model.health, bridge: model.bridge, refresh:model.refreshHealth)
             Divider()
             if !model.permission {
@@ -167,13 +174,12 @@ struct MainView: View {
                             Button("复制译文", systemImage: "doc.on.doc") { model.copyOutput() }
                                 .help(model.isCLIConnection && !model.hasTarget ? "复制完整译文，回到 Claude Code 按 ⌘V 粘贴，再确认发送" : "复制完整译文作为备用")
                         }
-                        if !model.isCLIConnection || model.hasTarget {
-                            Button { model.begin(insert: true) } label: {
+                        Button { model.begin(insert: true) } label: {
                                 Label(model.autoSend ? "发送给 Claude" : "翻译并填入", systemImage: "paperplane.fill")
                             }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(!model.hasTarget || model.input.count > InputPolicy.limit || model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        }
+                                .help(model.hasTarget ? "翻译后填入已核对的输入区" : "先在 CLI 或 Claude 输入区按 ⌃⌥E 连接，输入绑定成功后可用")
                     }
                 }.controlSize(.small)
             }.padding(.horizontal, 18).padding(.vertical, 12)

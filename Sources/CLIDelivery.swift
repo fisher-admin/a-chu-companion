@@ -61,10 +61,23 @@ enum CLIPromptPolicy {
         var text: String { lines.joined(separator: "\n") }
         var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
+    private static func terminalLines(_ screen: String) -> [String] {
+        var lines = screen.suffix(32_768).components(separatedBy: .newlines)
+        // Native terminals can expose unused viewport rows after the TUI.
+        // Ignore only blank rows; a shell/menu remains a nonblank boundary.
+        while lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeLast() }
+        return Array(lines.suffix(200))
+    }
+    static func diagnostic(_ screen: String) -> String {
+        let tail = Array(terminalLines(screen).suffix(12))
+        let footerCount = tail.filter { $0.contains("A畜伴侣 CLI · ") }.count
+        let inputCount = tail.filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("❯") }.count
+        return "（末尾标记 \(footerCount)，输入标识 \(inputCount)）"
+    }
     static func prompt(screen: String, binding: String, origin: CLIDeliveryOrigin) -> Prompt? {
         guard screen.utf16.count <= 500_000 else { return nil }
         // A suffix only; a tag elsewhere in scrollback never selects a pane.
-        let lines = Array(screen.suffix(32_768).components(separatedBy: .newlines).suffix(200))
+        let lines = terminalLines(screen)
         let tail = Array(lines.suffix(12))
         let footerPrefix = "A畜伴侣 CLI · " + String(binding.suffix(6))
         let matching = tail.indices.filter {
@@ -143,18 +156,28 @@ enum CLIPromptPolicy {
               let window = TargetBridge.elementAttribute(focus, kAXWindowAttribute) ?? TargetBridge.elementAttribute(ax, kAXFocusedWindowAttribute) else {
             throw BridgeError.message("终端未提供可核对的输入位置，可继续只读和复制。")
         }
+        return try captureSurface(app: app, focus: focus, window: window)
+    }
+    static func captureSurface(app: NSRunningApplication, focus: AXUIElement, window: AXUIElement) throws -> Surface {
         // Only the focused subtree. Never search other windows/tabs/panes.
-        var queue = [focus], candidates: [AXUIElement] = [], visited: Set<CFHashCode> = []
+        var queue = [focus], candidates: [AXUIElement] = [], textAreas: [AXUIElement] = [], visited: Set<CFHashCode> = []
         while !queue.isEmpty && visited.count < 64 {
             let item = queue.removeFirst(); guard visited.insert(CFHash(item)).inserted else { continue }
             if TargetBridge.attribute(item, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole { continue }
-            if let value = TargetBridge.attribute(item, kAXValueAttribute) as? String, value.contains("A畜伴侣 CLI · ") {
-                candidates.append(item); continue
+            if let value = TargetBridge.attribute(item, kAXValueAttribute) as? String {
+                if value.contains("A畜伴侣 CLI · ") { candidates.append(item); continue }
+                if [kAXTextAreaRole, kAXTextFieldRole].contains(TargetBridge.attribute(item, kAXRoleAttribute) as? String ?? "") {
+                    textAreas.append(item)
+                }
             }
             queue += (TargetBridge.attribute(item, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(32)
         }
-        guard candidates.count == 1 else { throw BridgeError.message("当前终端输入区未能唯一确认。请回到 Claude Code 输入区重新连接；仍可只读和复制。") }
-        return .init(app: app, window: window, focus: focus, element: candidates[0])
+        // A first status-line report may arrive only after configuring the
+        // adapter. Capture one text surface now; bind/deliver still require the
+        // exact current footer and process identity before any input operation.
+        let surfaces = candidates.isEmpty ? textAreas : candidates
+        guard surfaces.count == 1 else { throw BridgeError.message("当前终端未提供唯一的文字输入表面（文字区 \(textAreas.count)，标记区 \(candidates.count)）。请点中 Claude Code 输入区再按 ⌃⌥E；未自动选择其他窗口。") }
+        return .init(app: app, window: window, focus: focus, element: surfaces[0])
     }
     static func screen(_ surface: Surface) -> String? {
         AXUIElementSetMessagingTimeout(surface.element, 0.1)
@@ -193,17 +216,17 @@ enum CLIPromptPolicy {
     }
     func validate(_ binding: Binding, requireEmpty: Bool, frontmost: Bool) throws {
         try validateIdentity(binding, frontmost: frontmost)
-        guard let screen = environment.screen(binding.surface),
-              let prompt = CLIPromptPolicy.prompt(screen: screen, binding: binding.session, origin: binding.origin),
-              !requireEmpty || prompt.isEmpty else {
-            throw BridgeError.message("Claude Code 的原会话、输入位置或空输入状态已改变。未自动操作，译文已保留；请清空目标草稿并重新按 ⌃⌥E 连接。")
+        guard let screen = environment.screen(binding.surface) else { throw BridgeError.message("当前终端暂未提供输入区文字，尚未绑定自动填入。") }
+        guard let prompt = CLIPromptPolicy.prompt(screen: screen, binding: binding.session, origin: binding.origin) else {
+            throw BridgeError.message("当前 CLI 输入区与底部输入标记尚未匹配" + CLIPromptPolicy.diagnostic(screen) + "。等待同一窗口刷新，无需选择会话。")
         }
+        guard !requireEmpty || prompt.isEmpty else { throw BridgeError.message("CLI 输入区已有文字，未覆盖草稿。请清空原输入区，再按 ⌃⌥E 连接。") }
     }
     private func validateIdentity(_ binding: Binding, frontmost: Bool) throws {
-        guard environment.trusted(), environment.alive(binding.surface), environment.focused(binding.surface, frontmost),
-              environment.live(binding.origin) else {
-            throw BridgeError.message("CLI 的原窗口、焦点或进程已改变，没有自动发送。译文已保留。")
-        }
+        guard environment.trusted() else { throw BridgeError.message("辅助功能权限当前不可用，未自动填入 CLI。") }
+        guard environment.alive(binding.surface) else { throw BridgeError.message("原终端已关闭，未自动填入 CLI。") }
+        guard environment.focused(binding.surface, frontmost) else { throw BridgeError.message("原终端窗口或输入焦点尚未核对，未自动填入 CLI；请在原输入区按 ⌃⌥E。") }
+        guard environment.live(binding.origin) else { throw BridgeError.message("CLI 原进程已退出、挂起或改变，未自动发送。译文已保留。") }
     }
     func deliver(_ text: String, to binding: Binding, autoSend: Bool, current: () -> Bool) async throws -> Outcome {
         let beginning = text.trimmingCharacters(in: .whitespacesAndNewlines)

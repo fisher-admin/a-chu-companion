@@ -162,6 +162,8 @@ final class TranslatorModel: ObservableObject {
     @Published var configuration: TranslationSession.Configuration?
     @Published var showSettings = false
     @Published var showCLIPicker = false
+    @Published private(set) var cliConnectionHint = ""
+    private var cliCaptureFailed = false
     var isCLIConnection: Bool { bridge.enabled && bridge.selected.hasPrefix("cli-") }
     var showsOutgoingStatus: Bool { busy || isError || replies.status.isEmpty || !output.isEmpty }
     @Published var engine = CompanionPreferences.store.string(forKey: "engine") ?? "apple"
@@ -248,6 +250,7 @@ final class TranslatorModel: ObservableObject {
         bridge.onStop = { [weak self] in
             guard let self else { return }
             replies.stop(); retireConnectionRequest(); cliTarget = nil; pendingCLISurface = nil
+            cliConnectionHint = ""; cliCaptureFailed = false
             hasTarget = target != nil
         }
         bridge.onTick = { [weak self] in self?.replies.tick() }
@@ -261,15 +264,22 @@ final class TranslatorModel: ObservableObject {
                 replies.status = "已选择只读会话，等待正式回复；输入可翻译和复制。"
                 targetName = replies.sourceName; report(replies.status)
                 bindSelectedCLI()
+                if !hasTarget {
+                    if cliConnectionHint.isEmpty { cliConnectionHint = "输入尚未连接：请在当前 CLI 空输入区按 ⌃⌥E，直接绑定窗口，无需选择会话。" }
+                    report(cliConnectionHint, error: cliCaptureFailed)
+                }
             }
         }
         bridge.onCLIReport = { [weak self] in
             guard let self else { return }
             if let bound = cliTarget, bridge.choices.first(where: { $0.id == bound.session })?.delivery != bound.origin {
                 cliTarget = nil; hasTarget = false
-                report("CLI 输入来源发生变化，自动填入已暂停。回复读取保持；请回到当前输入区按 ⌃⌥E。")
+                pendingCLISurface = nil
+                cliConnectionHint = "CLI 输入来源发生变化，自动填入已暂停。请在当前输入区按 ⌃⌥E 直接重新连接。"
+                report(cliConnectionHint)
             }
-            matchCapturedCLI()
+            if cliTarget == nil && pendingCLISurface != nil && !bridge.selected.isEmpty { bindSelectedCLI() }
+            else { matchCapturedCLI() }
         }
         bridge.onSnapshot = { [weak self] snapshot in
             guard let self else { return }
@@ -299,12 +309,11 @@ final class TranslatorModel: ObservableObject {
     }
     func handleCaptureFailure(_ error: Error, bundle: String?) {
         guard bundle == "com.anthropic.claudefordesktop" || busy else {
-            let surface = try? cliCapture()
-            connectCLI(); pendingCLISurface = surface
-            awaitCLIFooter()
+            connectCapturedCLI()
             return
         }
         retireConnectionRequest(); target = nil; cliTarget = nil; pendingCLISurface = nil; hasTarget = false; targetName = "未选择输入框"
+        cliConnectionHint = ""; cliCaptureFailed = false
         if bridge.enabled { bridge.clearSelection() } else { replies.stop() }
         showCLIPicker = false
         report(error.localizedDescription, error: true)
@@ -313,13 +322,11 @@ final class TranslatorModel: ObservableObject {
         retireConnectionRequest()
         guard TargetBridge.nativeReplySupported(bundle: captured.app.bundleIdentifier, conversation: captured.conversation) else {
             onNonClaudeConnection(captured.name)
-            let surface = try? cliCapture()
-            connectCLI()
-            pendingCLISurface = surface
-            awaitCLIFooter()
+            connectCapturedCLI()
             return
         }
         cliTarget = nil; pendingCLISurface = nil
+        cliConnectionHint = ""; cliCaptureFailed = false
         target = captured; targetName = captured.name; hasTarget = true
         status = "\(language.name)译文将填入 \(targetName) 的原输入框。"; isError = false
         bridge.stop(); startReplyReading()
@@ -328,37 +335,65 @@ final class TranslatorModel: ObservableObject {
         connectionRequestID = nil; connectionTask?.cancel(); connectionTask = nil
         cliBindingTask?.cancel(); cliBindingTask = nil
     }
+    private func connectCapturedCLI() {
+        let capture = Result { try cliCapture() }
+        connectCLI()
+        switch capture {
+        case .success(let surface):
+            pendingCLISurface = surface
+            cliConnectionHint = "正在核对当前 CLI 输入窗口和会话标记，无需选择会话…"
+            report(cliConnectionHint)
+            awaitCLIFooter()
+        case .failure(let error):
+            cliCaptureFailed = true
+            cliConnectionHint = "CLI 输入未绑定：" + error.localizedDescription
+            report(cliConnectionHint, error: true)
+        }
+    }
     private func matchCapturedCLI() {
         guard let surface = pendingCLISurface, cliTarget == nil, bridge.selected.isEmpty else { return }
         // Reports can precede terminal redraw. Pair by the current pane's
         // strong footer only; never by report recency or the only candidate.
-        let matches = bridge.cliChoices.filter { choice in
-            guard let origin = choice.delivery else { return false }
-            return (try? self.cliDelivery.bind(surface: surface, session: choice.id, origin: origin)) != nil
+        var matches: [BridgeChoice] = [], issues: Set<String> = []
+        for choice in bridge.cliChoices {
+            guard let origin = choice.delivery else { continue }
+            do { _ = try cliDelivery.bind(surface: surface, session: choice.id, origin: origin); matches.append(choice) }
+            catch { issues.insert(error.localizedDescription) }
         }
         if matches.count == 1 { bridge.select(matches[0].id) }
+        else if matches.count > 1 { cliConnectionHint = "当前输入表面匹配到多个来源，未自动选择。请点中唯一的 CLI 输入区再按 ⌃⌥E。" }
+        else if issues.count == 1 { cliConnectionHint = issues.first! }
+        else if bridge.cliChoices.allSatisfy({ $0.delivery == nil }) { cliConnectionHint = "等待当前 CLI 的输入身份报告，尚未开启自动填入；无需选择会话。" }
     }
     private func awaitCLIFooter() {
         guard pendingCLISurface != nil else { return }
         matchCapturedCLI()
-        guard cliTarget == nil, bridge.selected.isEmpty else { return }
+        guard cliTarget == nil else { return }
         cliBindingTask = Task { [weak self] in
-            for _ in 0..<40 {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(6))
+            while ContinuousClock.now < deadline {
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
-                guard let self, self.bridge.enabled, self.bridge.selected.isEmpty else { return }
-                self.matchCapturedCLI()
+                guard let self, self.bridge.enabled, self.pendingCLISurface != nil, self.cliTarget == nil else { return }
+                if self.bridge.selected.isEmpty { self.matchCapturedCLI() }
+                else { self.bindSelectedCLI() }
             }
+            guard let self, !self.hasTarget, self.pendingCLISurface != nil else { return }
+            if self.cliConnectionHint.contains("正在核对") {
+                self.cliConnectionHint = "CLI 输入尚未绑定：没有核对到当前窗口的完整输入标记。请保持 CLI 空输入区可见，按 ⌃⌥E 直接连接；无需选择会话。"
+            }
+            self.report(self.cliConnectionHint, error: true)
         }
     }
-    func connectCLI(releaseSelection: Bool = true) {
+    func connectCLI(releaseSelection: Bool = true, showPicker: Bool = false) {
         guard !busy else { return }
         retireConnectionRequest(); target = nil
-        if releaseSelection { cliTarget = nil; pendingCLISurface = nil }
+        if releaseSelection { cliTarget = nil; pendingCLISurface = nil; cliConnectionHint = ""; cliCaptureFailed = false }
         hasTarget = cliTarget != nil
         if !bridge.enabled { bridge.start() }
         guard bridge.enabled else { report(bridge.status, error: true); return }
         if releaseSelection { bridge.clearSelection(); replies.status = "" }
-        showCLIPicker = true
+        showCLIPicker = showPicker
+        if cliTarget == nil && pendingCLISurface == nil { cliConnectionHint = "请在正在使用的 CLI 空输入区按 ⌃⌥E，直接连接当前窗口，无需选择会话。" }
         report("正在获取 Claude Code CLI 会话，请保持已登录的终端打开…")
         let id = UUID(), path = bridge.connectionPath
         connectionRequestID = id
@@ -367,7 +402,7 @@ final class TranslatorModel: ObservableObject {
                 try Task.checkCancellation()
                 try await cliEntryRequest(path)
                 guard connectionRequestID == id, bridge.enabled, !Task.isCancelled else { return }
-                report("CLI 入口已准备。请选择与终端底部编号相同的会话；没有候选时，请保持已登录的 Claude Code 打开并刷新报告。")
+                report(showPicker ? "CLI 入口已准备；选择来源只开启补充读取，不绑定输入窗口。" : (cliConnectionHint.isEmpty ? "CLI 入口已准备，请在当前终端输入区按 ⌃⌥E 直接连接。" : cliConnectionHint), error: cliCaptureFailed)
             } catch {
                 guard connectionRequestID == id, !Task.isCancelled else { return }
                 report(error.localizedDescription, error: true)
@@ -377,14 +412,18 @@ final class TranslatorModel: ObservableObject {
         }
     }
     private func bindSelectedCLI() {
-        guard let surface = pendingCLISurface, let choice = bridge.choices.first(where: { $0.id == bridge.selected }),
-              let origin = choice.delivery else { return }
+        guard let surface = pendingCLISurface, let choice = bridge.choices.first(where: { $0.id == bridge.selected }) else { return }
+        guard let origin = choice.delivery else {
+            cliConnectionHint = "等待当前 CLI 的输入身份报告，尚未开启自动填入；无需选择会话。"
+            return
+        }
         do {
             cliTarget = try cliDelivery.bind(surface: surface, session: choice.id, origin: origin)
             hasTarget = true; targetName = choice.name
+            cliConnectionHint = ""; cliCaptureFailed = false
             replies.status = "正在读取所选 CLI 会话的正式回复…"
             report("已连接 CLI 输入区；\(language.name)译文将自动填入原终端，回复和额度随当前会话读取。")
-        } catch { report("已连接只读来源，但输入位置尚未核对。请在该会话的空输入区按 ⌃⌥E；仍可翻译和复制。") }
+        } catch { cliConnectionHint = error.localizedDescription; report(cliConnectionHint, error: true) }
     }
     func report(_ message: String, error: Bool = false) { status = message; isError = error }
     func saveSettings(key: String, replaceKey: Bool) throws {

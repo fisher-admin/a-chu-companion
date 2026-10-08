@@ -4,6 +4,13 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-08 — build 70 — CLI快捷键直接连接
+
+- Capture the active CLI text surface before configuring reports; verify the same window when the footer or process identity arrives later. The shortcut no longer opens a session picker. / 快捷键先保存当前CLI输入表面，再准备报告；页脚或进程身份迟到时仍核对同一窗口，不再弹出会话选择。
+- Preserve capture failures independently of reply/usage status and keep the sending control visible but disabled until input is verified. / 连接失败原因独立显示，发送入口始终可见，输入未核对时保持禁用。
+- Ignore only trailing blank viewport rows when checking the current footer; retain shell/menu, nonempty draft and process/focus guards. / 末尾空白行不再遮挡连接标记；普通命令行、选择菜单、已有草稿及进程焦点检查保持。
+- All 34 offline groups, 49 CLI input checks, 30 routing checks and 23 Python checks passed. Native synthetic windows verified delayed first binding and actual single/multiline/collapsed paste behavior. Preserve build69's real input failure separately; live terminal acceptance remains pending. / 完整34组离线回归、49项CLI输入、30项路由及23项Python通过；原生模拟验证延迟直连与短文、多行、折叠粘贴。保留build69用户实际填入失败，真实终端验收另列。见[修订记录](docs/testing/cli-shortcut-binding-2026-10-08.md)。
+
 ## 1.1.8 — 2026-10-07 — build 69 — CLI自动填入修复
 
 - Bind CLI input separately from reply reading, checking the original window, current footer and process-bound marker; replies no longer clear the input target. / CLI输入与回复读取分别绑定，核对原窗口、当前会话页脚及进程标记，正文到达不再清除输入目标。

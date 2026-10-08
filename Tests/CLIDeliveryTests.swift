@@ -13,6 +13,9 @@ import CryptoKit
         let footer = "A畜伴侣 CLI · aaaaaa · project · 输入 abcdef123456abcdef12"
         let empty = "Claude Code\nPrevious answer.\n────────────────\n❯ \n────────────────\n" + footer + "\n? for shortcuts"
         check(CLIPromptPolicy.prompt(screen: empty, binding: binding, origin: origin)?.isEmpty == true, "current footer with an empty CLI composer permits a verified input binding")
+        let blankRows = String(repeating:"\n    ",count:40)
+        check(CLIPromptPolicy.prompt(screen:empty+blankRows,binding:binding,origin:origin)?.isEmpty == true,"unused blank terminal rows after the footer do not hide the current empty input surface")
+        check(CLIPromptPolicy.prompt(screen:empty+"\nfisher@host %"+blankRows,binding:binding,origin:origin)==nil,"trailing blank rows cannot turn a shell prompt into the Claude input surface")
         check(CLIPromptPolicy.prompt(screen: empty, binding: "cli-" + String(repeating:"b",count:64), origin: origin) == nil, "a different session marker never authorizes input")
         check(CLIPromptPolicy.prompt(screen: empty.replacingOccurrences(of:"abcdef123456abcdef12",with:"999999123456abcdef12"), binding: binding, origin: origin) == nil, "a restarted process footer cannot reuse the previous target")
         check(CLIPromptPolicy.prompt(screen: empty + "\nfisher@host %", binding: binding, origin: origin) == nil, "a shell prompt after Claude's scrollback is not an input destination")
@@ -20,6 +23,7 @@ import CryptoKit
         check(CLIPromptPolicy.prompt(screen: "❯\n"+footer+"\n❯\n"+footer, binding: binding, origin: origin) == nil, "ambiguous mixed panes are rejected rather than guessed")
         let pasted = empty.replacingOccurrences(of:"❯ ",with:"❯ Hello.")
         check(CLIPromptPolicy.receipt(screen:pasted,binding:binding,origin:origin,text:"Hello.") == .confirmed, "short pasted text is verified before sending")
+        check(CLIPromptPolicy.receipt(screen:pasted+blankRows,binding:binding,origin:origin,text:"Hello.") == .confirmed,"a padded native terminal still verifies exact pasted text")
         let multiline = empty.replacingOccurrences(of:"❯ ",with:"❯ First line.\n  Second line.")
         check(CLIPromptPolicy.receipt(screen:multiline,binding:binding,origin:origin,text:"First line.\nSecond line.") == .confirmed, "multiline text is compared without visual continuation indentation")
         let table = "| A | B |\n|---|---|\n| 1 | 2 |"
@@ -120,6 +124,7 @@ import CryptoKit
         let captured=TargetBridge.Target(app:own,element:element,window:element,value:verifiedEmpty,selection:nil,conversation:nil,
             identity:.init(role:"AXGroup",identifier:nil,description:nil,placeholder:nil))
         model.connectCapturedTarget(captured)
+        check(!model.showCLIPicker,"shortcut capture must wait for its current footer without asking the user to choose a CLI session")
         try await client()
         check(model.hasTarget && model.isCLIConnection && model.bridge.selected==binding,"shortcut surface pairs only the matching strong footer with its live CLI report")
         try await client("delta")
@@ -139,6 +144,17 @@ import CryptoKit
         while model.busy { try await Task.sleep(for:.milliseconds(10)) }
         check(events.isEmpty && model.output=="Hello." && model.input=="你好","switching selected CLI sessions while translating cannot send the late result")
         check(!model.hasTarget && model.replies.watching,"a different selected source stays readable without inheriting another pane")
+        screen=verifiedEmpty.replacingOccurrences(of:validTag,with:"waiting-for-footer")
+        model.connectCapturedTarget(captured)
+        try await client("read-only")
+        model.bridge.select(binding)
+        check(!model.hasTarget,"a captured surface cannot send before a verifiable CLI report and matching current footer")
+        screen=verifiedEmpty
+        try await client("refresh")
+        check(model.hasTarget,"a late valid identity must bind the captured surface of the same selected session without another shortcut or selection")
+        model.cliCapture={throw BridgeError.message("Synthetic capture unavailable")}
+        model.connectCapturedTarget(captured)
+        check(!model.showCLIPicker && model.status.contains("Synthetic capture unavailable"),"a failed shortcut exposes the input capture cause instead of opening a misleading read-only picker")
         print("\(count) CLI input policy checks; \(failures) failed")
         if failures > 0 { exit(1) }
     }

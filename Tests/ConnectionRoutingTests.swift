@@ -37,7 +37,7 @@ import ApplicationServices
         check(model.input == "保留草稿" && model.history.first?.id == "retained", "connection routing preserves the draft and acquired translations")
         check(model.status.contains("CLI") && !model.status.contains("读取已停止"), "an unverified composer receives CLI connection guidance instead of a false stopped reader")
         check(model.bridge.selected.isEmpty, "multiple reported CLI sessions are never selected automatically")
-        check(model.showCLIPicker, "an unverified captured composer opens an actionable CLI session picker")
+        check(!model.showCLIPicker && model.cliConnectionHint.contains("Synthetic unavailable"), "a shortcut preserves the capture failure without opening a CLI session picker")
         check(TargetBridge.nativeReplySupported(bundle: "com.anthropic.claudefordesktop", conversation: nil), "the official Desktop identity retains its native route")
         check(TargetBridge.nativeReplySupported(bundle: "unlisted.browser", conversation: "https://claude.ai/chat/synthetic"), "a verified Claude web composer is independent of browser brand")
         check(!TargetBridge.nativeReplySupported(bundle: "unlisted.terminal", conversation: nil), "a terminal carrier alone does not prove a Claude native composer")
@@ -65,7 +65,7 @@ import ApplicationServices
         try await Task.sleep(for: .milliseconds(20))
         check(model.status == selectedStatus && model.replies.watching && model.bridge.selected == "cli-routing-two", "a late connection failure cannot overwrite the selected current source")
         model.handleCaptureFailure(BridgeError.message("Synthetic non-editable terminal surface"), bundle: "another.carrier")
-        check(model.showCLIPicker && !model.hasTarget && model.bridge.choices.count == 2, "a non-editable terminal surface opens the same picker without an app-name whitelist")
+        check(!model.showCLIPicker && !model.hasTarget && model.bridge.choices.count == 2, "a non-editable shortcut exposes its cause without a picker or app-name whitelist")
         model.showCLIPicker = false
         model.handleCaptureFailure(BridgeError.message("Synthetic Desktop focus failure"), bundle: "com.anthropic.claudefordesktop")
         check(!model.showCLIPicker && model.status.contains("Desktop focus failure"), "a known Desktop focus failure does not masquerade as a CLI connection")

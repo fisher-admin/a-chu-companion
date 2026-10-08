@@ -164,7 +164,7 @@ struct BridgeChoice: Identifiable {
                 await self?.receive(data) ?? false
             }
             connectionPath = server.connectionFile?.path ?? ""; enabled = true
-            status = "桥接已开启，等待已安装入口；请选择来源后读取"
+            status = "桥接已开启，等待当前聊天入口连接"
         } catch { status = error.localizedDescription }
     }
     private func receive(_ data: Data) -> Bool {
