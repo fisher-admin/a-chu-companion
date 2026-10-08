@@ -4,6 +4,13 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-07 — build 67 — installed / CLI连接分流修复
+
+- Route verified Desktop/Web composers separately from read-only CLI sessions. An unverified terminal composer no longer closes discovery or enters native reply reading; release old usage without guessing a replacement. / 已核实的桌面和网页保留原生读取；终端输入不再关闭只读入口或误入原生读取，旧额度解除，不猜测当前会话。
+- Add a main-window CLI acquisition and session-selection menu, independent of terminal brand. Selected sessions remain reading while waiting for formal text; late connection errors cannot replace the new selection. CLI input remains manual. / 主界面增加CLI报告获取与明确会话选择，不依赖终端品牌；等待正文时持续读取，迟到错误不覆盖新选择，终端输入仍由用户完成。
+- Accept the observed German indirect-question form “geben Sie an, ob”, retaining direct-question, assertion, number and literal checks. / 兼容实际德文间接问句表达，保留直接问句、附加答案、数字和字面量保护。
+- Preserve build66 as `f0db179` and its installed backup. All 33 groups / 608 declared checks, 19 loopback HTTP checks and bridge checks passed; 107 frozen source files and five scripts matched installation under the original signing requirement. Live acceptance is recorded separately. / 保留build66提交及应用备份；完整33组608项、本机HTTP19项及桥接检查通过，107个源文件与5个脚本冻结核对，沿原签名安装；真实验收另列。
+
 ## 1.1.8 — 2026-10-07 — build 66 — installed / 间接问句修订
 
 - Accept matching English/German indirect questions for Chinese requests such as “explain whether”, without requiring a trailing question mark. Direct questions becoming answers and added assertions remain checked. / 中文“请说明是否……”可忠实译成以句号结尾的英/德间接问句；直接问题变答案、附加内容的保护仍保留。

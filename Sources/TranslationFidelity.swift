@@ -103,7 +103,7 @@ enum TranslationFidelity {
         let pattern: String
         switch language {
         case .english: pattern = #"(?i)\b(?:explain|clarify|determine|check|assess)\b[^.!?\n]{0,160}\bwhether\b"#
-        case .german: pattern = #"(?i)\b(?:erklär\w*|prüf\w*|beurteil\w*|klär\w*)\b[^.!?\n]{0,160}\bob\b"#
+        case .german: pattern = #"(?i)\b(?:erklär\w*|prüf\w*|beurteil\w*|klär\w*|geben\s+Sie\s+an)\b[^.!?\n]{0,160}\bob\b"#
         default: return false
         }
         return translation.range(of: pattern, options: .regularExpression) != nil

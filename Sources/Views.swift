@@ -30,6 +30,14 @@ struct MainView: View {
                 Circle().fill(model.hasTarget ? .green : .orange).frame(width: 7, height: 7)
                 Text(model.hasTarget ? model.targetName + (replies.watching ? " · 正在读取" : " · 读取已停止") : (replies.watching ? replies.sourceName + " · 正在读取（只读）" : "未连接 Claude"))
                     .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                if !model.hasTarget {
+                    Menu("连接 CLI") {
+                        Button("获取 CLI 会话") { model.connectCLI() }
+                        ForEach(model.bridge.choices.filter { $0.id.hasPrefix("cli-") }) { source in
+                            Button("读取 " + source.name) { model.bridge.select(source.id) }
+                        }
+                    }.menuStyle(.borderlessButton).fixedSize().disabled(model.busy)
+                }
                 if model.hasTarget || replies.watching {
                     Button(replies.watching ? "停止读取" : "开始读取") {
                         if replies.watching { model.bridge.stop(); replies.stop() } else { model.startReplyReading() }

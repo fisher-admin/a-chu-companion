@@ -163,7 +163,7 @@ struct BridgeChoice: Identifiable { let id: String; var name: String { id.hasPre
     }
     func select(_ binding: String) {
         guard choices.contains(where: { $0.id == binding }) else { return }
-        onSelection(); selected = binding; clock?.cancel()
+        selected = binding; clock?.cancel(); onSelection()
         onUsageConnection(binding)
         status = "已绑定只读来源；输入仅翻译/复制，不模拟终端回车"
         if let snapshot = snapshots[binding] { onSnapshot(snapshot) }
@@ -175,6 +175,11 @@ struct BridgeChoice: Identifiable { let id: String; var name: String { id.hasPre
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }
+    }
+    func clearSelection() {
+        clock?.cancel(); clock = nil; selected = ""
+        onSelection(); onUsageConnection(nil)
+        status = "只读入口与候选会话已保留，请选择当前使用的来源。"
     }
     func stop() {
         onUsageConnection(nil)

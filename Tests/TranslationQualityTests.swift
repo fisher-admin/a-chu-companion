@@ -41,6 +41,18 @@ import AppKit
         check(TranslationFidelity.reviewReasons(source: "请保留原有设置。", translation: "元の設定を維持してください。", target: .foreign(.japanese)).isEmpty, "valid Japanese Han characters are not treated as untranslated Chinese")
         check(!(await rejected("请说明结果是否可靠？", "Please explain whether the result is reliable.", target: .foreign(.english))), "a faithful indirect English question need not end in a question mark")
         check(!(await rejected("请说明结果是否可靠？", "Bitte erklären Sie, ob das Ergebnis zuverlässig ist.", target: .foreign(.german))), "a faithful indirect German question need not end in a question mark")
+        check(!(await rejected("请说明结果是否可靠？", "Bitte geben Sie an, ob die Ergebnisse zuverlässig sind.", target: .foreign(.german))), "the observed German request to state whether remains an indirect question")
+        var observedGerman = ""
+        do {
+            observedGerman = try await TranslationFidelity.$target.withValue(.foreign(.german)) {
+                try await TextTranslation.runProtected("不要删除 `keep.json`。请运行20次，并说明结果是否可靠？") { source in
+                    source.contains("不要") ? "Nicht löschen" : "Bitte führen Sie es 20 Mal aus und geben Sie an, ob die Ergebnisse zuverlässig sind."
+                }
+            }
+        } catch { }
+        check(observedGerman.contains("`keep.json`") && observedGerman.contains("20") && observedGerman.contains("geben Sie an, ob"), "the observed indirect German request survives protected-fragment translation and reassembly")
+        check(await rejected("结果可靠吗？", "Geben Sie an, ob die Ergebnisse zuverlässig sind.", target: .foreign(.german)), "an indirect German command cannot excuse a changed direct question")
+        check(!TranslationFidelity.reviewReasons(source: "请说明结果是否可靠？", translation: "Bitte geben Sie an, ob die Ergebnisse zuverlässig sind. Ja, sie sind zuverlässig.", target: .foreign(.german)).isEmpty, "an answer added after the observed German command still requires review")
         check(await rejected("结果可靠吗？", "The result is reliable.", target: .foreign(.english)), "a direct question cannot become a declarative answer")
         check(await rejected("请说明结果是否可靠？", "Yes, the result is reliable.", target: .foreign(.english)), "an indirect question cannot become a yes answer")
         check(await rejected("请解释结论。结果可靠吗？", "Please explain the conclusion. The result is reliable.", target: .foreign(.english)), "an earlier explanation command cannot exempt a later direct question")

@@ -34,20 +34,20 @@ final class ClaudeSource: @unchecked Sendable {
     }
     static func bind(pid: pid_t, bundle: String, composer: AXUIElement, window: AXUIElement, name: String) throws -> ClaudeSource {
         let fixture = bundle == "local.achu.fixture"
-        guard fixture || ["com.anthropic.claudefordesktop", "com.google.Chrome", "com.apple.Safari", "com.microsoft.edgemac", "com.brave.Browser"].contains(bundle) else {
-            throw BridgeError.message("自动回复翻译目前只适配 Claude 桌面版及浏览器中的 claude.ai。")
-        }
         var cursor: AXUIElement? = composer
         for _ in 0..<32 {
             guard let element = cursor else { break }
             AXUIElementSetMessagingTimeout(element, 0.2)
             if attribute(element, kAXRoleAttribute) as? String == "AXWebArea" {
                 let url = urlString(element)
-                if fixture || URL(string: url)?.host == "claude.ai" {
+                if fixture || TargetBridge.nativeReplySupported(bundle: nil, conversation: url) {
                     return ClaudeSource(pid: pid, root: element, window: window, composer: composer, name: name, fixture: fixture)
                 }
             }
             cursor = axElement(attribute(element, kAXParentAttribute))
+        }
+        guard fixture || bundle == "com.anthropic.claudefordesktop" else {
+            throw BridgeError.message("未确认 Claude 网页输入框。终端 CLI 请使用「连接 CLI」只读入口。")
         }
         // SPA navigation may replace the original composer and web area.
         // Rebind reading only within the already selected window.

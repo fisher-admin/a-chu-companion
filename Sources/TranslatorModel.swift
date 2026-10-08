@@ -184,6 +184,13 @@ final class TranslatorModel: ObservableObject {
     private let remoteKeyRead: ((RemoteTranslationProvider) throws -> String)?
     private let credentialPresence: (RemoteTranslationProvider, String) -> CredentialPresence
     private var activeID: UUID?
+    private var connectionRequestID: UUID?
+    private var connectionTask: Task<Void, Never>?
+    var cliEntryRequest: @MainActor (String) async throws -> Void = { path in
+        try await UsageAcquisition.run("install-cli", connection: path)
+        try Task.checkCancellation()
+        try await UsageAcquisition.run("request-cli")
+    }
     private var pending: Job?
     private struct Job {
         let id: UUID
@@ -227,12 +234,21 @@ final class TranslatorModel: ObservableObject {
         replies.onReplyAcquired = { [weak self] id, foreign, language in self?.recordReplyOriginal(id: id, foreign: foreign, language: language) }
         replies.onReply = { [weak self] id, foreign, chinese, language in self?.recordReply(id: id, foreign: foreign, chinese: chinese, language: language) }
         replies.onReplyState = { [weak self] id, complete in self?.markReply(id: id, complete: complete) }
-        bridge.onStop = { [weak self] in self?.replies.stop() }
+        bridge.onStop = { [weak self] in self?.replies.stop(); self?.retireConnectionRequest() }
         bridge.onTick = { [weak self] in self?.replies.tick() }
-        bridge.onSelection = { [weak self] in self?.replies.stop(); self?.target = nil; self?.hasTarget = false }
+        bridge.onSelection = { [weak self] in
+            guard let self else { return }
+            retireConnectionRequest(); replies.stop(); target = nil; hasTarget = false
+            if !bridge.selected.isEmpty {
+                replies.watching = true
+                replies.sourceName = BridgeChoice(id: bridge.selected).name
+                replies.status = "已选择只读会话，等待正式回复；输入可翻译和复制。"
+                targetName = replies.sourceName; report(replies.status)
+            }
+        }
         bridge.onSnapshot = { [weak self] snapshot in
             guard let self else { return }
-            target = nil; hasTarget = false; targetName = "桥接来源 · 仅翻译/复制"
+            target = nil; hasTarget = false; targetName = BridgeChoice(id: bridge.selected).name
             replies.watching = true; replies.sourceName = targetName
             replies.configure(engine: engine, baseURL: baseURL, model: activeAIModel, language: language)
             replies.ingest(snapshot)
@@ -251,16 +267,49 @@ final class TranslatorModel: ObservableObject {
         refreshPermission()
         if CompanionPreferences.simulated { report("本机模拟不连接真实 Claude。"); return }
         do {
-            target = try TargetBridge.capture()
-            targetName = target!.name
-            hasTarget = true
-            status = "\(language.name)译文将填入 \(targetName) 的原输入框。"
-            isError = false
-            bridge.stop()
-            startReplyReading()
+            connectCapturedTarget(try TargetBridge.capture())
         } catch {
             target = nil; hasTarget = false; targetName = "未选择输入框"
             status = error.localizedDescription; isError = false
+        }
+    }
+    func connectCapturedTarget(_ captured: TargetBridge.Target) {
+        retireConnectionRequest()
+        guard TargetBridge.nativeReplySupported(bundle: captured.app.bundleIdentifier, conversation: captured.conversation) else {
+            target = nil; hasTarget = false; targetName = "未选择 Claude 来源"
+            if bridge.enabled { bridge.clearSelection() } else { replies.stop() }
+            replies.status = ""
+            onNonClaudeConnection(captured.name)
+            report("当前输入框尚未确认 Claude 来源。Claude Code 终端请点击「连接 CLI」，再选择正在使用的会话；不会向终端模拟回车。")
+            return
+        }
+        target = captured; targetName = captured.name; hasTarget = true
+        status = "\(language.name)译文将填入 \(targetName) 的原输入框。"; isError = false
+        bridge.stop(); startReplyReading()
+    }
+    private func retireConnectionRequest() {
+        connectionRequestID = nil; connectionTask?.cancel(); connectionTask = nil
+    }
+    func connectCLI() {
+        guard !busy else { return }
+        retireConnectionRequest(); target = nil; hasTarget = false
+        if !bridge.enabled { bridge.start() }
+        guard bridge.enabled else { report(bridge.status, error: true); return }
+        bridge.clearSelection(); replies.status = ""
+        report("正在获取 Claude Code CLI 会话，请保持已登录的终端打开…")
+        let id = UUID(), path = bridge.connectionPath
+        connectionRequestID = id
+        connectionTask = Task {
+            do {
+                try await cliEntryRequest(path)
+                guard connectionRequestID == id, bridge.enabled, !Task.isCancelled else { return }
+                report("CLI 入口已准备。请在「连接 CLI」菜单选择当前会话；没有候选时，需在 Claude Code 完成一次正常回复。")
+            } catch {
+                guard connectionRequestID == id, !Task.isCancelled else { return }
+                report(error.localizedDescription, error: true)
+            }
+            if connectionRequestID == id { connectionRequestID = nil; connectionTask = nil }
+            refreshHealth()
         }
     }
     func report(_ message: String, error: Bool = false) { status = message; isError = error }

@@ -23,6 +23,12 @@ final class TargetBridge {
     }
     enum Outcome { case inserted, sendKeyPressed, unconfirmed }
 
+    nonisolated static func nativeReplySupported(bundle: String?, conversation: String?) -> Bool {
+        if bundle == "com.anthropic.claudefordesktop" || bundle == "local.achu.fixture" { return true }
+        guard let conversation, let url = URLComponents(string: conversation) else { return false }
+        return url.scheme == "https" && url.host == "claude.ai" && url.user == nil && url.password == nil && url.port == nil
+    }
+
     static var trusted: Bool { AXIsProcessTrusted() }
     static func requestPermission() {
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String

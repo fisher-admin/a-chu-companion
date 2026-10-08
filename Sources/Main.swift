@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if channel == .web { usage.acquire(.web, pageURL: url) }
         }
         model.onNonClaudeConnection = { [weak self] name in
-            self?.usage.awaitChatEntrance("当前连接的「\(name)」不是 Claude 桌面版或 claude.ai，未显示额度")
+            self?.usage.awaitChatEntrance("尚未确认「\(name)」的 Claude 来源；终端请通过「连接 CLI」选择会话")
         }
         model.bridge.onUsageConnection = { [weak self] binding in
             guard let self else { return }
