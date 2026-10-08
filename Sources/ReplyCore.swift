@@ -302,8 +302,6 @@ enum ClaudeDecoder {
         return MarkdownTable.source(headers: headers, rows: Array(rows.dropFirst()))
     }
     private enum CodeBodyPart { case text(BodyText), tool }
-    /// Claude app interface prompts observed inside a reply's AX subtree.
-    static let appPrompts: Set<String> = ["How is Claude doing this session?", "How's Claude doing this session?"]
     private static func codeBody(_ root: ReplyNode) -> String {
         joined(codeBodyParts(root).compactMap { part -> BodyText? in
             if case .text(let value) = part { return value }; return nil
@@ -423,7 +421,7 @@ enum ClaudeDecoder {
                 let value = node.text.isEmpty ? node.label : node.text
                 let marker = node.role == "AXListMarker"
                 let content = marker && value.last?.isWhitespace != true ? value + " " : value
-                return value.isEmpty || excluded.contains(activityKey(value)) || appPrompts.contains(value.trimmingCharacters(in: .whitespacesAndNewlines)) ? [] : [.text(.init(value: content, joinsNext: marker, staticFileName: !marker && inlineReference(value)))]
+                return value.isEmpty || excluded.contains(activityKey(value)) ? [] : [.text(.init(value: content, joinsNext: marker, staticFileName: !marker && inlineReference(value)))]
             }
             if node.role == "AXLink" {
                 let value = text(node)
@@ -435,16 +433,17 @@ enum ClaudeDecoder {
                     // This is the renderer's trailing activity group, not a
                     // keyword filter over the assistant's actual paragraphs.
                     let values = child.children.map { $0.text.isEmpty ? $0.label : $0.text }
-                    let footer = index > 0 && child.role == "AXGroup" && !values.isEmpty &&
+                    let footer = index > 0 && index == node.children.count - 1 && child.role == "AXGroup" && !values.isEmpty &&
                         child.children.allSatisfy { $0.role == "AXStaticText" } && values.allSatisfy {
                             ["running", "Working…", "Thinking…", "Working...", "Thinking..."].contains($0) ||
                             $0.range(of: "^[0-9,.]+ tokens$", options: .regularExpression) != nil
                         }
                     // A tool still in progress renders its label beside a bare
                     // "running" status before its card controls appear.
-                    let running = child.role == "AXGroup" && !values.isEmpty &&
+                    let running = child.role == "AXGroup" && values.count == 2 &&
                         child.children.allSatisfy { $0.role == "AXStaticText" } &&
-                        values.contains { ["running", "Running", "running…", "Running…"].contains($0.trimmingCharacters(in: .whitespaces)) }
+                        values[0].range(of: #"(?i)^(?:Capturing (?:window|screen)|Running (?:a |the )?command|Reading (?:a |the )?file|Writing (?:a |the )?file|Searching files|Executing command)$"#, options: .regularExpression) != nil &&
+                        ["running", "Running", "running…", "Running…"].contains(values[1].trimmingCharacters(in: .whitespaces))
                     return footer ? [] : running ? [.tool] : body(child)
                 })
             }

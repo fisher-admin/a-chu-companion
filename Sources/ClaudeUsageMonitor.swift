@@ -144,6 +144,7 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
     func awaitChatEntrance(_ message: String = "连接 Claude 聊天后，显示该入口当前登录账户的额度") {
         stop(); replyRefresh?.cancel(); replyRefresh = nil
         following = false; followingURL = nil; awaitingEntrance = true
+        evidenceBinding = ""; evidenceSignature = ""; accountLabel = ""
         snapshot = nil; plan = .unknown; stale = false; fingerprint = nil; organization = ""
         accountDisplayName = "账户待核对"; status = message
     }
@@ -154,9 +155,10 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         guard !awaitingEntrance, source == .desktop || source == .session || source == .visiblePage else { return }
         replyRefresh?.cancel()
         let delay = replyRefreshDelay
+        let token = generation
         replyRefresh = Task { [weak self] in
             do { try await Task.sleep(for: delay) } catch { return }
-            guard let self, !self.awaitingEntrance else { return }
+            guard let self, !self.awaitingEntrance, self.generation == token else { return }
             self.replyRefresh = nil
             self.refresh(force: true)
         }
@@ -269,7 +271,7 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         let key = key(observation.source, observation.binding)
         guard !observation.epoch.isEmpty, observation.epoch.count <= 128,
               (0...1_000_000_000).contains(observation.sequence), observation.identity == nil || observation.identity?.valid == true else {
-            if observation.binding == evidenceBinding && source == sourceFor(observation.source) { clearVisibleAccount("当前账户身份尚未核对") }
+            if !awaitingEntrance, observation.binding == evidenceBinding && source == sourceFor(observation.source) { clearVisibleAccount("当前账户身份尚未核对") }
             return false
         }
         guard retiredAccountEpochs[key]?.contains(observation.epoch) != true else { return false }
@@ -288,11 +290,11 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         if changed || incoming == nil {
             candidates.removeAll { self.key($0.source, $0.binding) == key }
             if pendingEvidence.map({ self.key($0.source, $0.binding) == key }) == true { pendingEvidence = nil }
-            if observation.binding == evidenceBinding && source == sourceFor(observation.source) {
+            if !awaitingEntrance, observation.binding == evidenceBinding && source == sourceFor(observation.source) {
                 clearVisibleAccount(incoming == nil ? "正在核对当前账户，已隐藏旧额度" : "账户已变化，正在读取当前账户额度")
             }
         }
-        if observation.binding == evidenceBinding && source == sourceFor(observation.source), let identity = observation.identity {
+        if !awaitingEntrance, observation.binding == evidenceBinding && source == sourceFor(observation.source), let identity = observation.identity {
             accountDisplayName = identity.displayName
             if var connection = visibleConnection {
                 connection.identity = identity; visibleConnection = connection
@@ -309,7 +311,7 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         receivedReport(channelFor(observation.source), observation: observation, quota: false)
         candidates.removeAll { $0.source == observation.source && $0.binding == observation.binding }
         if pendingEvidence?.source == observation.source && pendingEvidence?.binding == observation.binding { pendingEvidence = nil }
-        guard observation.binding == evidenceBinding, source == sourceFor(observation.source) else { return }
+        guard !awaitingEntrance, observation.binding == evidenceBinding, source == sourceFor(observation.source) else { return }
         // An identity-only startup/refresh is not a quota report. Never retain a
         // previous window after the current provider has explicitly omitted it.
         snapshot = nil; stale = false; evidenceSignature = ""
@@ -326,7 +328,7 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         receivedAt = Date(); pendingEvidence = evidence
         candidates.removeAll { $0.source == evidence.source && $0.binding == evidence.binding }
         candidates.insert(evidence, at: 0); if candidates.count > 8 { candidates.removeLast(candidates.count - 8) }
-        guard evidence.binding == evidenceBinding, source == sourceFor(evidence.source) else { return }
+        guard !awaitingEntrance, evidence.binding == evidenceBinding, source == sourceFor(evidence.source) else { return }
         accountDisplayName = evidence.identity!.displayName
         if following, let connection = visibleConnection, let saved = try? JSONEncoder().encode(connection) { settings.set(saved, forKey: "visibleUsageConnection") }
         if evidence.contentSignature != evidenceSignature || snapshot == nil || evidence.source == .usagePage {
@@ -361,6 +363,7 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         snapshot = nil; plan = .unknown; fingerprint = nil; organization = ""; stale = false; accountDisplayName = "账户待核对"; evidenceBinding = ""; accountLabel = ""; status = "连接额度后自动更新"
     }
     func stop() {
+        replyRefresh?.cancel(); replyRefresh = nil
         generation = UUID(); task?.cancel(); task = nil; automaticRetry?.cancel(); automaticRetry = nil; requested = false; refreshing = false
         acquisitionTask?.cancel(); acquisitionTask = nil; acquiring = false
     }

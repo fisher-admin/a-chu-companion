@@ -202,8 +202,8 @@ final class FetchCounter: @unchecked Sendable {
         check(recovered == "现在问问 Gemini。" && attempts.count == 2, "a lost placeholder falls back to the unprotected translation instead of returning a broken result")
         check(SystemTranslationProtection.corrected("它不是一个不偏不倚的估计器，使用功能选择。", source: "It is not an unbiased estimator after feature selection.") == "它不是一个无偏估计量，使用特征选择。", "observed term mistranslations are corrected when the source names the term")
         check(SystemTranslationProtection.corrected("功能选择很重要。", source: "Function selection matters.") == "功能选择很重要。", "corrections never apply when the source does not contain the term")
-        check(SystemTranslationProtection.corrected("不偏不倚：比较并不表明估计是不偏不倚的。", source: "Not unbiased: the comparison does not show the estimate is unbiased.") == "无偏：比较并不表明估计是无偏的。",
-              "the bare statistical adjective unbiased is corrected after the longer phrases")
+        check(SystemTranslationProtection.corrected("不偏不倚：比较并不表明估计是不偏不倚的。", source: "Not unbiased: the comparison does not show the estimate is unbiased.") == "不偏不倚：比较并不表明估计是不偏不倚的。",
+              "a bare adjective is not globally rewritten into an inferred statistical claim")
 
         // Flattened Code replies keep inline runs inside their sentence.
         let marker = ReplyNode(role: "AXGroup", label: "Message 9", children: [
@@ -226,7 +226,7 @@ final class FetchCounter: @unchecked Sendable {
             .init(role: "AXStaticText", text: "First clue is here."),
             .init(role: "AXStaticText", text: "the dropped"),
             .init(role: "AXStaticText", text: "space returns."),
-            .init(role: "AXStaticText", text: "How is Claude doing this session?")
+            .init(role: "AXToolbar", children: [.init(role: "AXStaticText", text: "How is Claude doing this session?")])
         ])
         let decoded = ClaudeDecoder.codeSegments(flat, responseComplete: true).map(\.text).joined(separator: "|")
         check(decoded.contains("The fix will make the reader skip images by default — images can't be translated anyway."),
@@ -268,7 +268,7 @@ final class FetchCounter: @unchecked Sendable {
         let retried = try await SystemTranslationProtection.translate("The keychain fetch is failing.", toChinese: true) { _ in
             scriptCalls += 1; return scriptCalls == 1 ? "鑰匙串獲取失敗。" : "钥匙串获取失败。"
         }
-        check(retried == "钥匙串获取失败。" && scriptCalls == 2, "a Traditional system result is retried once and the Simplified retry is used")
+        check(retried == "钥匙串获取失败。" && scriptCalls == 1, "Traditional system prose becomes Simplified without another request")
         let converted = try await SystemTranslationProtection.translate("The keychain fetch is failing.", toChinese: true) { _ in "鑰匙串獲取失敗。" }
         check(converted == "钥匙串获取失败。", "a repeated Traditional result is converted to Simplified script")
         check(SystemTranslationProtection.simplified("使用 python3，Gemini 保持不变。") == "使用 python3，Gemini 保持不变。", "the script guarantee leaves Simplified text, names and commands unchanged")

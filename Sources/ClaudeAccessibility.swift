@@ -83,12 +83,12 @@ final class ClaudeSource: @unchecked Sendable {
     private func refreshRoot() throws {
         if Self.attribute(root, kAXRoleAttribute) as? String == "AXWebArea", isInCurrentWindow() { return }
         guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else {
-            throw BridgeError.message("Claude 已关闭，读取已停止。")
+            throw ReplyReadStopped(message: "Claude 已关闭，读取已停止。")
         }
         let axApp = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(axApp, 0.5)
         if let windows = Self.attribute(axApp, kAXWindowsAttribute) as? [AXUIElement], !windows.contains(where: { CFEqual($0, window) }) {
-            throw BridgeError.message("连接的 Claude 窗口已关闭，读取已停止。")
+            throw ReplyReadStopped(message: "连接的 Claude 窗口已关闭，读取已停止。")
         }
         var visited = 0
         let start = Date()
@@ -112,6 +112,7 @@ final class ClaudeSource: @unchecked Sendable {
         root = current
     }
     func capture() async throws -> ReplySnapshot {
+        guard AXIsProcessTrusted() else { throw ReplyReadStopped(message: "辅助功能权限已撤销，读取已停止。请重新开启权限后连接。") }
         let work = Task.detached(priority: .utility) { try await self.snapshot() }
         return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
     }
@@ -132,11 +133,11 @@ final class ClaudeSource: @unchecked Sendable {
     private func snapshot(visibleOnly: Bool = false) async throws -> ReplySnapshot {
         let captureStarted = Date()
         defer { metricsLock.withLock { captureSamples += 1; lastCaptureSeconds = Date().timeIntervalSince(captureStarted) } }
-        guard AXIsProcessTrusted() else { throw BridgeError.message("辅助功能权限已关闭，自动读取已停止。") }
+        guard AXIsProcessTrusted() else { throw ReplyReadStopped(message: "辅助功能权限已关闭，自动读取已停止。") }
         try refreshRoot()
         let conversation = Self.urlString(root)
         guard let format = ClaudeConversationPage.format(conversation) ?? (fixture ? .chat : nil) else {
-            throw BridgeError.message("Claude 对话页面已关闭或切换，自动读取已停止。")
+            throw ReplyReadStopped(message: "Claude 对话页面已关闭或切换，自动读取已停止。")
         }
         let metadata = [kAXRoleAttribute, kAXDescriptionAttribute, kAXTitleAttribute, kAXChildrenAttribute] as CFArray
         let skipRoles = ["AXTextArea", "AXTextField", "AXToolbar", "AXButton", "AXPopUpButton", "AXCheckBox"]

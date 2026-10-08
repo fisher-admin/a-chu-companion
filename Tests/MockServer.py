@@ -1,6 +1,7 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json, sys, time
 class Handler(BaseHTTPRequestHandler):
+    recovery_calls = 0
     def log_message(self, *args): pass
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
@@ -24,6 +25,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(307); self.send_header('Location', '/ok/chat/completions'); self.end_headers(); return
         if self.path.startswith('/unauthorized'):
             self.send_response(401); self.end_headers(); self.wfile.write(b'{"error":"test"}'); return
+        if self.path.startswith('/recover'):
+            Handler.recovery_calls += 1
+            if Handler.recovery_calls == 1:
+                self.send_response(503); self.end_headers(); return
+        if self.path.startswith('/quota'):
+            self.send_response(429); self.send_header('Retry-After', '2'); self.end_headers(); return
         if self.path.startswith('/slow'): time.sleep(3)
         if self.path.startswith('/echo') or self.path.startswith('/adaptive'):
             text = body['messages'][1]['content']

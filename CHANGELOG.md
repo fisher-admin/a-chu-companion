@@ -4,6 +4,22 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-07 — build 64 — optimization candidate / 三阶段优化候选
+
+- Preserve Claude's original build63 as commit `207a06d`, without resetting the branch or rewriting earlier version history. / Claude 原始 build63 已保存为 `207a06d`；保留此前全部提交与实测记录。
+- Share cooldowns across incoming/outgoing cloud requests; preserve the primary error before local fallback, honor Retry-After, and bound temporary recovery to three attempts per slice. / 发送和回译共用服务等待状态；系统兜底前保留原失败原因，遵守限流等待，每片段临时失败最多自动尝试三次。
+- Keep old usage hidden while waiting for the current entrance, including saved bindings after restart; include conversation identity when detecting reply completion. / 等待当前入口时不恢复旧额度；重启保存的绑定只作为候选，相同回复在不同会话分别刷新。
+- Remove broad terminology substitutions, preserve literals through script conversion, and distinguish negative numbers from Markdown lists. / 移除泛化术语替换；繁简转换先处理正文再恢复文件名；负数不再误判成列表。
+- Apply shared fidelity checks to prose and table cells, validate reassembled numbers/literals/table layout, and hold uncertain translations for review before automatic delivery. Deterministic checks do not prove full semantic equivalence. / 正文与单元格共用校验，完整拼接后再核对数字、字面量和表格；疑似附加解释的译文供核对，暂停自动发送。这些规则不能证明所有语义都正确。
+- Recover temporary reading errors with 1–60 second backoff; stop distinctly on explicit permission revocation or source exit. Keep delivery failures separate from translation fallback. / 普通读取错误逐步等待1至60秒后恢复；权限撤销或目标退出明确停止。回填失败保留译文，不再重新翻译掩盖原因。
+- Add independent red/green regression evidence and a precise synthetic-fixture exception to repository scanning; live acceptance is recorded separately in the [execution report](docs/testing/optimization-results-2026-10-07.md). / 新增独立修复前失败与修复后通过证据，扫描仅对指定文件中的已核实假凭据精确放行；真实验收另列，不以模拟结果替代。
+
+## 1.1.7 — 2026-10-07 — builds 59–63 — historical Claude audit batch / Claude 原始审核修改批次
+
+- Preserve the original source snapshot and build63 installation evidence. The exact per-build release sequence was not documented; this grouped entry does not invent separate releases or acceptance results. / 保留原始源码与 build63 安装证据；原修改未留下完整的逐构建发布说明，本条按批次记录，不虚构每个构建的单独发布或验收结果。
+- Introduce shared shape/length checks, review-only outgoing system fallback, local reverse-translation fallback, technical phrase correction, completed-reply usage refresh and streaming Code continuity. / 增加译文形状与长度检查、发送方向只供核对的系统兜底、回复回译系统兜底、术语纠正、完整回复额度刷新以及 Code 流式容器连续识别。
+- Independent baseline: 29 offline groups / 496 declared checks, 14 loopback HTTP checks and bridge contracts passed; repository scanning flagged a verified synthetic session in a new test file. Important uncovered regressions are documented in the [independent review](docs/testing/claude-change-review-2026-10-07.md). / 独立基线29组496项离线检查、本机HTTP14项及桥接检查通过；扫描命中新测试中的合成 session。未被原测试覆盖的问题见独立审查，不将此批次称为完整真实验收通过。
+
 ## 1.1.7 — 2026-10-07 — build 58 — installed / 桌面后台输入框核对
 
 - Preserve the explicitly captured live composer when Claude exposes only its background page as focused while the companion is active. Continue checking the original window, conversation, value and caret; verify actual focus again before insertion. / Claude在伴侣前台时只暴露后台页面焦点，仍可核对先前明确绑定的有效输入框；保留窗口、会话、内容和光标检查，实际回填前再次核对焦点。

@@ -57,9 +57,9 @@ import Foundation
         let waiting = ReplyMonitor(); waiting.watching = true
         for _ in 0..<7 { waiting.handleReadFailure(ReplyReadPending(message: "Claude 消息区尚未就绪。")) }
         precondition(waiting.watching && waiting.status.contains("继续检查"))
-        for _ in 0..<5 { waiting.handleReadFailure(BridgeError.message("Unrelated page")) }
+        waiting.handleReadFailure(ReplyReadStopped(message: "Unrelated page"))
         precondition(!waiting.watching)
-        print("PASS: pending Code startup never exhausts the closed-page limit; unrelated pages still stop")
+        print("PASS: pending Code startup remains active; an explicitly closed or unrelated page stops")
         for address in ["https://claude.ai/settings", "https://claude.ai/epitaxy/test/other", "https://claude.ai.evil.example/epitaxy/test", "http://claude.ai/epitaxy/test", "file:///epitaxy/test"] {
             precondition(ClaudeConversationPage.format(address) == nil)
         }

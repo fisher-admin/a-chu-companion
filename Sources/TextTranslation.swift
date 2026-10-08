@@ -32,6 +32,7 @@ enum TranslationChunks {
             result += part.tableCell && part.translatable ? MarkdownTable.escapeCell(value) : value
             partial(result)
         }
+        try TranslationFidelity.validateAssembly(source: text, translation: result, target: TranslationFidelity.target)
         return result
     }
 
@@ -47,6 +48,7 @@ enum TranslationChunks {
             result += try await piece(chunk, timeout: timeout, translate: translate)
         }
         try Task.checkCancellation()
+        try TranslationFidelity.validateAssembly(source: text, translation: result, target: TranslationFidelity.target)
         return result
     }
 
@@ -70,9 +72,7 @@ enum TranslationChunks {
             }
             // Check the raw provider output: flattening below would otherwise
             // hide an appended answer paragraph, heading or table.
-            if TranslationContext.source == nil {
-                try TranslationFidelity.validate(source: core, translation: translated, target: TranslationFidelity.target)
-            }
+            try TranslationFidelity.validate(source: core, translation: translated, target: TranslationFidelity.target)
             // Provider-added line breaks are formatting, not new paragraphs.
             // Literal multiline source and table-cell escaping remain intact.
             let normalized = TranslationContext.source == nil && !core.contains(where: \.isNewline)

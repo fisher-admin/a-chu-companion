@@ -35,7 +35,7 @@ A畜伴侣是一款原生 macOS 菜单栏应用，把中文输入、外语回填
 - 增加折叠状态检查，自动检查不发送推理请求；额度刷新合并、冷却并遵守服务等待时间。
 - 新增可见 Usage / CLI statusLine 及只读 CLI / Chrome 桥接。已配置入口选择聊天来源后自动跟随额度，无需另确认额度账户；没有有效当前身份时隐藏旧值，不回退其他端凭据。网页与CLI完整真实服务流程仍待验收。
 
-当前 **1.1.7 build58已安装**，完整28组429项离线回归通过，桌面后台输入框核对已修订。真实Chat已观察到额度自动连接、外语自动发送及正式原文和表格读取；Gemini仍出现提问译文后附加答案、回译服务返回503的问题，三端完整真实验收尚未通过。参见[最新三端结果与完整真实步骤](docs/testing/three-channel-active-usage-2026-10-07.md)及[桥接说明](Bridge/README.md)。保留[最初开发模拟记录](docs/testing/optimization-implementation-report.md)和[最初真实测试方案](docs/testing/real-environment-test-plan.md)，其未安装、待授权状态属于历史阶段。
+当前 **1.1.8 build64已安装**，后续实测修订另见记录。32组575项离线声明检查、本机HTTP19项、完整桥接检查及公开文件与历史扫描均通过；独立验证覆盖共用限流等待、有限恢复、当前入口额度隔离和翻译输出保护。桌面、网页、可见CLI的真实验收另见[执行记录](docs/testing/optimization-results-2026-10-07.md)。保留[build58实测](docs/testing/three-channel-active-usage-2026-10-07.md)和[Claude build63独立审查](docs/testing/claude-change-review-2026-10-07.md)，不抹去旧失败或将模拟结果当作真实验收。
 
 ## 系统与适配范围
 

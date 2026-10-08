@@ -22,6 +22,7 @@ REQUIRED = (
 DUMMY = {
     "Tests/UsageTests.swift": {"sk-ant-" + "sid01-testonlyabcdefghijklmnop"},
     "Tests/UsageMonitorTests.swift": {"sk-ant-" + "sid01-fixtureonlyabcdefghijklmnop"},
+    "Tests/FidelityFallbackTests.swift": {"sk-ant-" + "sid01-fixtureonlyabcdefghijklmnop"},
 }
 PATTERNS = (
     ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])")),

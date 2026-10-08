@@ -57,7 +57,7 @@ enum TranslationFidelity {
             let value = String(line)
             func has(_ pattern: String) -> Bool { value.range(of: pattern, options: .regularExpression) != nil }
             if has(#"^\s{0,3}#{1,6}\s"#) { found.insert(.heading) }
-            if has(#"^\s*([-*+•·]|\d{1,3}[.)、）]|[（(]\d{1,3}[)）]|[一二三四五六七八九十]{1,3}[、.])\s*\S"#) { found.insert(.list) }
+            if has(#"^\s*(?:[-*+]\s+\S|[•·]\s*\S|\d{1,3}[.)]\s+\S|\d{1,3}[、）]\s*\S|[（(]\d{1,3}[)）]\s*\S|[一二三四五六七八九十]{1,3}[、.]\s*\S)"#) { found.insert(.list) }
             if has(#"^\s*(```|~~~)"#) { found.insert(.fence) }
             if has(#"^\s*>"#) { found.insert(.quote) }
         }
@@ -72,6 +72,9 @@ enum TranslationFidelity {
     }
 
     static func validate(source: String, translation: String, target: TranslationTarget?) throws {
+        if clearNegativeCommand(source), !hasNegation(translation, target: target) {
+            throw TranslationFidelityError(reason: "明确的禁止指令丢失了否定含义")
+        }
         let added = structures(translation).subtracting(structures(source))
         if added.contains(.table) { throw TranslationFidelityError(reason: "原文没有的表格") }
         if added.contains(.heading) { throw TranslationFidelityError(reason: "原文没有的标题") }
@@ -86,5 +89,77 @@ enum TranslationFidelity {
            endsWithQuestion(source), !endsWithQuestion(translation) {
             throw TranslationFidelityError(reason: "原文是问句，译文结尾却不是问句")
         }
+        if endsWithQuestion(source), !questionLike(translation, target: target),
+           translation.range(of: #"(?i)^\s*(?:yes\b|no\b|ja\b|nein\b|是的|不是|はい|いいえ|네[,.，。\s]|아니요)"#, options: .regularExpression) != nil {
+            throw TranslationFidelityError(reason: "译文回答了原文的问题")
+        }
+    }
+
+    private static func clearNegativeCommand(_ text: String) -> Bool {
+        text.range(of: #"(?i)^\s*(?:(?:请)?(?:不要|勿|不得|禁止|切勿)\s*(?:删除|修改|覆盖|发送|访问|运行|执行|安装|重置|打开)|(?:do\s+not|don't|never)\s+(?:delete|modify|overwrite|send|access|run|execute|install|reset|open)\b)"#, options: .regularExpression) != nil
+    }
+    private static func hasNegation(_ text: String, target: TranslationTarget?) -> Bool {
+        let pattern: String
+        switch target {
+        case .chinese: pattern = "不|勿|禁止|避免|未|没"
+        case .foreign(.japanese): pattern = "ない|ません|禁止|避け"
+        case .foreign(.korean): pattern = "않|하지\\s*마|하지\\s*말|금지|피하|삼가"
+        case .foreign(.german): pattern = #"(?i)\b(?:nicht|kein\w*|nie|vermeid\w*)\b"#
+        default: pattern = #"(?i)\b(?:not|no|never|avoid|refrain)\b|n't\b"#
+        }
+        return text.range(of: pattern, options: .regularExpression) != nil
+    }
+    private static func questionLike(_ text: String, target: TranslationTarget?) -> Bool {
+        if endsWithQuestion(text) { return true }
+        switch target {
+        case .chinese: return text.range(of: "(?:吗|呢)[。！]?\\s*$|是否|能否", options: .regularExpression) != nil
+        case .foreign(.japanese): return text.range(of: "(?:ですか|ますか|でしょうか)[。]?\\s*$", options: .regularExpression) != nil
+        case .foreign(.korean): return text.range(of: "(?:나요|까요|습니까)[.]?\\s*$", options: .regularExpression) != nil
+        default: return false
+        }
+    }
+
+    /// Run after reassembly, not on a fragment whose neighbouring literals
+    /// were deliberately withheld from the provider.
+    static func validateAssembly(source: String, translation: String, target: TranslationTarget?) throws {
+        try validate(source: source, translation: translation, target: target)
+        func literals(_ text: String) -> [String] {
+            TranslationStructure.parts(text).filter { !$0.translatable &&
+                ($0.text.rangeOfCharacter(from: .letters) != nil || $0.text.contains("`") || $0.text.contains("$")) }.map(\.text)
+        }
+        guard literals(source) == literals(translation) else {
+            throw TranslationFidelityError(reason: "代码、文件名、路径或链接发生了增加、删除或改动")
+        }
+        func numbers(_ text: String) -> [String] {
+            // Han/Hangul may touch a number without a space. Only Latin
+            // identifier prefixes suppress matches; display spacing before %
+            // does not change the numeric fact.
+            let regex = try! NSRegularExpression(pattern: #"(?<![A-Za-z0-9_])[-+−]?\d+(?:[.,]\d+)*(?:[eE][-+]?\d+)?(?:\s*%)?"#)
+            let ns = text as NSString
+            return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range).filter { !$0.isWhitespace } }
+        }
+        let beforeNumbers = numbers(source), afterNumbers = numbers(translation)
+        let spelledNumber = beforeNumbers.isEmpty && source.range(of: "[零〇一二三四五六七八九十百千万亿]", options: .regularExpression) != nil
+        guard beforeNumbers == afterNumbers || spelledNumber else { throw TranslationFidelityError(reason: "原文数字发生了增加、删除或改动") }
+        func tables(_ text: String) -> [[Int]] {
+            MarkdownTable.blocks(text).compactMap { block in
+                guard case .table(let table) = block else { return nil }
+                return [table.headers.count] + table.rows.map(\.count)
+            }
+        }
+        guard tables(source) == tables(translation) else { throw TranslationFidelityError(reason: "表格行列结构发生了改动") }
+    }
+
+    /// Uncertain changes remain visible for review. These checks deliberately
+    /// do not claim to prove equivalence or spend another model request.
+    static func reviewReasons(source: String, translation: String, target: TranslationTarget?) -> [String] {
+        func sentences(_ text: String) -> Int {
+            let prose = TranslationStructure.parts(text).filter(\.translatable).map(\.text).joined()
+            let pattern = #"[。！？!?]+|\.(?=\s+[A-Z]|\s*$)"#
+            let regex = try! NSRegularExpression(pattern: pattern)
+            return max(1, regex.numberOfMatches(in: prose, range: NSRange(location: 0, length: (prose as NSString).length)))
+        }
+        let before = sentences(source), after = sentences(translation)
+        return before <= 3 && after > before ? ["译文句子增多，可能包含额外解释"] : []
     }
 }

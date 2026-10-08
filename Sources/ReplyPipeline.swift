@@ -9,6 +9,8 @@ import Foundation
         var revision = UUID()
         var chinese: String?
         var failed = false
+        var retryAt: TimeInterval?
+        var attempts = 0
     }
     private struct Record {
         var original: String
@@ -37,7 +39,7 @@ import Foundation
     private var active: (id: String, index: Int, revision: UUID)?
     private(set) var completedTurns = 0
     private(set) var busy = false
-    var hasFailures: Bool { suspended || records.values.contains { $0.slices.contains { $0.failed } } }
+    var hasFailures: Bool { suspended || records.values.contains { $0.slices.contains { $0.failed || $0.retryAt != nil } } }
     var pendingCharacters: Int { records.values.reduce(0) { $0 + $1.slices.filter { $0.chinese == nil }.reduce(0) { $0 + $1.part.text.count } } }
     var queuedCharacters: Int { ready().reduce(0) { $0 + (records[$1.0]?.slices[$1.1].part.text.count ?? 0) } }
     var queuedCount: Int { ready().count }
@@ -121,11 +123,13 @@ import Foundation
     }
     func tick(now: TimeInterval) { self.now = now; pump() }
     private func ready() -> [(String, Int)] {
-        guard !suspended, now >= cooldownUntil else { return [] }
+        guard !suspended else { return [] }
         var result: [(String, Int)] = []; var characters = 0
         for id in order {
             guard let record = records[id] else { continue }
             for (index, slice) in record.slices.enumerated() where slice.chinese == nil && !slice.failed {
+                guard slice.retryAt.map({ now >= $0 }) ?? true else { continue }
+                if slice.part.translatable, now < cooldownUntil, fallback == nil { continue }
                 guard record.complete || (incremental && now - slice.changedAt >= 3) else { continue }
                 if let active, active.id == id && active.index == index { continue }
                 // A protected block may be larger; it needs no cloud request.
@@ -147,14 +151,24 @@ import Foundation
         onStatus("正在翻译稳定片段…", true)
         task = Task { [weak self] in
             guard let self else { return }
+            var primaryFailure: Error?
             do {
                 var fallbackReason: Error?
                 let translated = slice.part.translatable ? try await TranslationFidelity.$target.withValue(.chinese) {
                     try await TranslationContext.$source.withValue(slice.part.context) {
+                        if self.now < self.cooldownUntil, let fallback = self.fallback {
+                            primaryFailure = ServiceCooldown(seconds: self.cooldownUntil - self.now)
+                            let value = try await TextTranslation.run(slice.part.text, translate: fallback)
+                            fallbackReason = primaryFailure
+                            return value
+                        }
                         do { return try await TextTranslation.run(slice.part.text, translate: self.translate) }
-                        catch let error where !(error is CancellationError) && !Task.isCancelled && self.fallback != nil {
-                            // The primary service failed or produced suspicious output:
-                            // translate this slice locally instead of stranding it.
+                        catch let error where !(error is CancellationError) && !Task.isCancelled {
+                            guard self.epoch == token else { throw CancellationError() }
+                            primaryFailure = error
+                            if let wait = error as? ServiceCooldown { self.cooldownUntil = max(self.cooldownUntil, self.now + wait.seconds) }
+                            if let wait = error as? ServiceTransientError { self.cooldownUntil = max(self.cooldownUntil, self.now + wait.seconds) }
+                            guard self.fallback != nil else { throw error }
                             let value = try await TextTranslation.run(slice.part.text, translate: self.fallback!)
                             fallbackReason = error
                             return value
@@ -164,19 +178,28 @@ import Foundation
                 let value = slice.part.tableCell && slice.part.translatable ? MarkdownTable.escapeCell(translated) : translated
                 guard epoch == token, !Task.isCancelled, let current = records[id], index < current.slices.count, current.slices[index].revision == slice.revision else { return }
                 records[id]?.slices[index].chinese = value
+                records[id]?.slices[index].retryAt = nil
+                records[id]?.slices[index].attempts = 0
                 publish(id)
-                if let fallbackReason {
+                let review = TranslationFidelity.reviewReasons(source: slice.part.text, translation: translated, target: .chinese)
+                if !review.isEmpty {
+                    onStatus("本段中文已显示，译文需要核对（" + review.joined(separator: "；") + "）；继续读取后续原文。", false)
+                } else if let fallbackReason {
                     onStatus("翻译服务未能提供可用译文（" + fallbackReason.localizedDescription + "），本段已改用系统翻译。", false)
                 } else {
                     onStatus(hasFailures ? "部分片段翻译失败，原文和已有中文已保留；可重试未完成片段。" : "阶段性中文已更新，继续读取后续回复。", false)
                 }
             } catch {
                 guard epoch == token, let current = records[id], index < current.slices.count, current.slices[index].revision == slice.revision else { return }
-                if let wait = error as? ServiceCooldown {
-                    cooldownUntil = now + wait.seconds
-                    onStatus("服务限流，保留原文和已有中文；按服务要求等待后继续。", false)
-                } else { records[id]?.slices[index].failed = true }
-                onStatus(error is CancellationError ? "翻译已取消，可重试。" : "翻译失败：" + error.localizedDescription + "；已有中文保留，可重试。", false)
+                let failure = primaryFailure ?? error
+                let wait = (failure as? ServiceCooldown)?.seconds ?? (failure as? ServiceTransientError)?.seconds
+                records[id]?.slices[index].attempts += 1
+                if let wait, !(error is CancellationError), slice.attempts < 2 {
+                    cooldownUntil = max(cooldownUntil, now + wait)
+                    records[id]?.slices[index].retryAt = cooldownUntil
+                } else { records[id]?.slices[index].failed = true; records[id]?.slices[index].retryAt = nil }
+                let primary = primaryFailure.map { $0.localizedDescription + "；" } ?? ""
+                onStatus(error is CancellationError ? "翻译已取消，可重试。" : "翻译失败：" + primary + error.localizedDescription + (records[id]?.slices[index].retryAt != nil ? "；保留原文和已有中文，等待后自动重试。" : "；已有中文保留，可重试。"), false)
             }
             guard epoch == token else { return }
             task = nil; active = nil; busy = false
@@ -192,7 +215,7 @@ import Foundation
     }
     func retry() {
         suspended = false
-        for id in order { for index in records[id]?.slices.indices ?? 0..<0 { records[id]?.slices[index].failed = false } }
+        for id in order { for index in records[id]?.slices.indices ?? 0..<0 { records[id]?.slices[index].failed = false; records[id]?.slices[index].attempts = 0 } }
         pump()
     }
     func retire(_ ids: Set<String>) {

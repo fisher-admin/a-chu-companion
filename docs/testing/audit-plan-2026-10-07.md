@@ -1,5 +1,7 @@
 # 独立审计：项目研读结论与测试/优化方案（草案）
 
+> 历史计划：以下基线与“未修改”描述只对应 Claude 开始审计前的阶段，不代表当前工作区。Claude build63 已保存为提交 `207a06d`；后续独立审查及三阶段优化见 [审查报告](claude-change-review-2026-10-07.md) 与 [实施计划](optimization-execution-plan-2026-10-07.md)。
+
 日期：2026-10-07（America/Los_Angeles）。分支 `codex/gemini-translation`，提交 `a783f60`，工作区干净；已安装并运行 1.1.7 build58。本文件是待确认的方案，**尚未修改任何源码，也未进行新的真实发送**。
 
 ## 1. 基线（本次独立复现）

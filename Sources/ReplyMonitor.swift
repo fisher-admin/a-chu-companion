@@ -26,6 +26,7 @@ import Translation
     /// source reporting completion), never for streaming updates.
     var onReplyCompleted: () -> Void = {}
     private var lastCompletedCandidate: ReplyCandidate?
+    private var completedConversation = ""
     var testTranslation: (@MainActor (String) async throws -> String)?
     var testFallback: (@MainActor (String) async throws -> String)?
     private var lastUsageCandidate: ReplyCandidate?
@@ -38,6 +39,7 @@ import Translation
     private var baseURL = ""
     private var model = ""
     private var errors = 0
+    private(set) var readRetrySeconds: Double = 1
     private var transientReadDisplay: (before: String, display: String)?
     private var captureGeneration = UUID()
     private var pipeline: ReplyPipeline?
@@ -116,14 +118,15 @@ import Translation
         if let latest = snapshot.messages.last(where: { $0.author == .assistant }) {
             let candidate = ReplyCandidate(ordinal: latest.ordinal, text: latest.text, segment: latest.segment)
             reportReplyObserved(candidate)
-            if snapshot.responseComplete, lastCompletedCandidate != candidate {
-                lastCompletedCandidate = candidate; onReplyCompleted()
+            if snapshot.responseComplete, completedConversation != snapshot.conversation || lastCompletedCandidate != candidate {
+                completedConversation = snapshot.conversation; lastCompletedCandidate = candidate; onReplyCompleted()
             }
         }
         translationPipeline().observe(conversation: snapshot.conversation, messages: snapshot.messages,
                                       responseComplete: snapshot.responseComplete, now: now)
         translating = pipeline?.busy == true
         errors = 0
+        readRetrySeconds = 1
     }
     func startPolling() {
         guard watching, let source, polling == nil else { return }
@@ -137,7 +140,7 @@ import Translation
                     guard sessionID == token, watching else { return }
                     if captureGeneration == captureToken { ingest(snapshot) }
                 } catch { guard sessionID == token else { return }; handleReadFailure(error) }
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: .seconds(readRetrySeconds))
             }
         }
     }
@@ -213,12 +216,16 @@ import Translation
         activeSession = nil; reverseConfiguration = nil; systemTaskID = nil
     }
     func handleReadFailure(_ error: Error) {
+        guard watching else { return }
+        if error is CancellationError { return }
+        if let stopped = error as? ReplyReadStopped { pause(stopped.localizedDescription); return }
         let before = transientReadDisplay.flatMap { status == $0.display ? $0.before : nil } ?? status
         if let pending = error as? ReplyReadPending {
-            errors = 0; status = "等待 Claude 原文，自动读取会继续检查。" + pending.localizedDescription
+            errors = 0; readRetrySeconds = 1; status = "等待 Claude 原文，自动读取会继续检查。" + pending.localizedDescription
         } else {
             errors += 1
-            if errors >= 5 { pause(error.localizedDescription); return } else { status = "正在重新检查 Claude 页面…" }
+            readRetrySeconds = min(60, pow(2, Double(min(errors - 1, 6))))
+            status = "读取暂时失败，\(Int(readRetrySeconds))秒后重新检查 Claude 页面；自动读取保持开启。"
         }
         transientReadDisplay = (before, status)
     }
@@ -243,8 +250,10 @@ import Translation
     func stop(clear: Bool = false) {
         transientReadDisplay = nil
         sessionID = UUID(); watching = false; polling?.cancel(); polling = nil
+        errors = 0; readRetrySeconds = 1
         pipeline?.cancel(); pipeline = nil; cancelSystem(); translating = false
         source = nil; lastUsageCandidate = nil; lastCompletedCandidate = nil; historyRequestID = nil; historyChoices = []; showHistoryPicker = false
+        completedConversation = ""
         status = "自动读取已停止。"
         if clear { original = ""; chinese = "" }
     }

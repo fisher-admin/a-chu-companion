@@ -36,6 +36,12 @@ class RepositoryChecksTests(unittest.TestCase):
         private = "-----BEGIN " + "PRIVATE KEY-----\nconfidential\n"
         self.assertEqual(checks.credential_kinds("local.pem", private), ["private key"])
 
+    def test_fallback_fixture_exception_is_limited_to_exact_value_and_path(self):
+        dummy = "sk-ant-" + "sid01-fixtureonlyabcdefghijklmnop"
+        self.assertEqual(checks.credential_kinds("Tests/FidelityFallbackTests.swift", dummy), [])
+        self.assertIn("Claude session", checks.credential_kinds("README.md", dummy))
+        self.assertIn("Claude session", checks.credential_kinds("Tests/FidelityFallbackTests.swift", dummy + "extra"))
+
     def test_independent_provider_tokens_are_detected(self):
         github = "gh" + "p_" + "x" * 36
         anthropic = "sk-ant-" + "api03-" + "x" * 48

@@ -103,8 +103,8 @@ import AppKit
         for _ in 0..<13 { model.replies.handleReadFailure(ReplyReadPending(message: "正文尚未就绪")) }
         precondition(model.replies.watching && model.replies.status.contains("继续检查"))
         print("PASS: repeated pending snapshots keep automatic reply monitoring alive")
-        for _ in 0..<5 { model.replies.handleReadFailure(BridgeError.message("检测到切换会话")) }
-        precondition(!model.replies.watching && model.replies.status.contains("切换会话"))
+        model.replies.handleReadFailure(ReplyReadStopped(message: "检测到不受支持的页面，读取已停止"))
+        precondition(!model.replies.watching && model.replies.status.contains("不受支持"))
         precondition(model.history[0].foreign.hasSuffix("New ending."))
         print("PASS: persistent unsafe reads still stop monitoring and preserve acquired originals")
         model.replies.watching = true

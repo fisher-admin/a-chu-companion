@@ -59,6 +59,24 @@ import Foundation
             }
         }
         print("PASS: Gemini network timeouts produce clear feedback without exposing request details")
-        print("14 HTTP integration tests passed")
+        let recoveryRequest = try AIProtocol.request(text: "你好", baseURL: base + "/recover", model: "test", key: "synthetic-recovery-key")
+        do { _ = try await AITranslator.translate(recoveryRequest); preconditionFailure("503 must be typed") }
+        catch let failure as ServiceTransientError { precondition(failure.seconds == 2 && failure.reason.contains("503")) }
+        print("PASS: actual HTTP 503 has a typed bounded-recovery cause")
+        do { _ = try await AITranslator.translate(recoveryRequest); preconditionFailure("shared cooldown must block") }
+        catch is ServiceCooldown { }
+        print("PASS: another translation request cannot bypass a transient cooldown")
+        try await Task.sleep(for: .milliseconds(2100))
+        let recovered = try await AITranslator.translate(recoveryRequest)
+        precondition(recovered == "Hello")
+        print("PASS: actual HTTP recovers after the shared service wait")
+        let quotaRequest = try AIProtocol.request(text: "你好", baseURL: base + "/quota", model: "test", key: "synthetic-quota-key")
+        do { _ = try await AITranslator.translate(quotaRequest); preconditionFailure("429 must be typed") }
+        catch let failure as ServiceCooldown { precondition(failure.seconds == 2) }
+        print("PASS: HTTP Retry-After reaches the shared gate")
+        do { _ = try await AITranslator.translate(quotaRequest); preconditionFailure("429 wait must survive another request") }
+        catch let failure as ServiceCooldown { precondition(failure.seconds > 0 && failure.seconds <= 2) }
+        print("PASS: subsequent requests honor the original quota wait")
+        print("19 HTTP integration tests passed")
     }
 }

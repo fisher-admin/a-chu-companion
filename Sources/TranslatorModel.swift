@@ -152,6 +152,7 @@ final class TranslatorModel: ObservableObject {
         }
     }
     private var outputLanguage: TranslationLanguage = .english
+    private var outputSource = ""
     @Published var busy = false
     @Published var status = "点击聊天输入框，再按 ⌃⌥E 唤出A畜伴侣。"
     @Published var isError = false
@@ -195,6 +196,7 @@ final class TranslatorModel: ObservableObject {
         /// Set when the system translation replaces a failed remote result.
         /// Such a draft is only shown for review; it is never inserted or sent.
         var fallbackReason: String? = nil
+        var reviewApproved = false
     }
 
     init(permissionCheck: @escaping @MainActor () -> Bool = { TargetBridge.trusted },
@@ -324,7 +326,10 @@ final class TranslatorModel: ObservableObject {
                                 return try await AITranslator.translate(request, provider: provider)
                             }
                         }
-                        try await finish(result, job: job)
+                        // Translation failures may use a review-only fallback;
+                        // delivery failures must retain this result and their own cause.
+                        do { try await finish(result, job: job) }
+                        catch { failed(error, id: job.id) }
                     } catch let error where !(error is CancellationError) && !Task.isCancelled && activeID == job.id {
                         startSystemFallback(job, reason: error, provider: provider)
                     } catch { failed(error, id: job.id) }
@@ -363,10 +368,17 @@ final class TranslatorModel: ObservableObject {
         guard activeID == job.id, !Task.isCancelled else { return }
         guard !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw BridgeError.message("翻译结果为空，请重试。") }
         try ForeignTextPolicy.validate(translated, incoming: false)
+        try TranslationFidelity.validateAssembly(source: job.text, translation: translated, target: .foreign(job.language))
+        let review = TranslationFidelity.reviewReasons(source: job.text, translation: translated, target: .foreign(job.language))
         output = translated; outputLanguage = job.language
+        outputSource = job.text
         if let index = history.firstIndex(where: { $0.id == job.id.uuidString }) { history[index].foreign = translated }
         chatRevision += 1
-        if job.insert, let target = job.target {
+        if job.insert && input != job.text && !job.reviewApproved {
+            report("中文草稿在翻译期间已改变，旧译文已保留，未自动填入或发送。请重新翻译当前草稿。")
+        } else if !review.isEmpty && !job.reviewApproved {
+            report("译文需要核对（" + review.joined(separator: "；") + "），未自动填入或发送。确认后可点「填入译文」。")
+        } else if job.insert, let target = job.target {
             report("翻译完成，正在检查原输入框…")
             let outcome = try await TargetBridge.deliver(translated, to: target, autoSend: job.send,
                                                         commandReturn: job.commandReturn)
@@ -432,7 +444,8 @@ final class TranslatorModel: ObservableObject {
         let refreshed: TargetBridge.Target
         do { refreshed = try TargetBridge.refresh(target) }
         catch { report(error.localizedDescription, error: true); return }
-        let job = Job(id: UUID(), text: input, insert: true, target: refreshed, send: autoSend, commandReturn: commandReturn, language: outputLanguage)
+        guard input.isEmpty || input == outputSource else { report("中文草稿已改变，请重新翻译后再填入。", error: true); return }
+        let job = Job(id: UUID(), text: outputSource, insert: true, target: refreshed, send: autoSend, commandReturn: commandReturn, language: outputLanguage, reviewApproved: true)
         let result = output
         activeID = job.id; busy = true
         task = Task {

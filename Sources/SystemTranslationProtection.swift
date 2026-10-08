@@ -19,16 +19,15 @@ enum SystemTranslationProtection {
     static let chineseCorrections: [(source: String, wrong: [String], right: String)] = [
         ("unbiased estimator", ["不偏不倚的估计器", "公正的估计器", "无偏见的估计器"], "无偏估计量"),
         ("unbiased estimate", ["不偏不倚的估计", "公正的估计", "无偏见的估计"], "无偏估计"),
-        ("unbiased", ["不偏不倚"], "无偏"),
         ("feature selection", ["功能选择"], "特征选择"),
         ("held-out error", ["保留错误", "保留误差", "留出错误"], "留出误差"),
         ("random variation", ["随机变化"], "随机波动"),
-        ("chance", ["偶然的", "偶然性"], "随机水平"),
-        ("engine", ["发动机"], "引擎"),
     ]
     static func corrected(_ translated: String, source: String) -> String {
         var result = translated
         for item in chineseCorrections where source.range(of: #"(?<![\p{L}\p{N}_])"# + NSRegularExpression.escapedPattern(for: item.source) + #"(?![\p{L}\p{N}_])"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            if ["feature selection", "random variation"].contains(item.source),
+               source.range(of: #"(?i)\b(?:estimator|cross-validation|classification|regression|variance|MSE|training fold|statistical)\b"#, options: .regularExpression) == nil { continue }
             for wrong in item.wrong { result = result.replacingOccurrences(of: wrong, with: item.right) }
         }
         return result
@@ -77,28 +76,35 @@ enum SystemTranslationProtection {
 
     /// Translate with protection; fall back to the unprotected text whenever
     /// the system translation did not return every placeholder intact.
-    /// The reply target is Simplified Chinese, yet system translation was
-    /// observed returning Traditional for some slices inside the app.
+    /// Script conversion and narrow corrections apply to prose while literal
+    /// placeholders are still masked. Restoring literals is always the last step.
     static func simplified(_ text: String) -> String {
         text.applyingTransform(StringTransform("Hant-Hans"), reverse: false) ?? text
     }
     static func translate(_ text: String, toChinese: Bool,
                           using translate: (String) async throws -> String) async throws -> String {
         let masked = mask(text, toChinese: toChinese)
-        func attempt() async throws -> String {
-            if masked.replacements.isEmpty { return try await translate(text) }
-            if let restored = restore(try await translate(masked.text), masked) { return restored }
-            return try await translate(text)
+        func prose(_ value: String) -> String {
+            toChinese ? corrected(simplified(value), source: text) : value
         }
-        var output = try await attempt()
-        if toChinese {
-            // One retry usually returns Simplified; otherwise convert the script.
-            if simplified(output) != output {
-                let again = try await attempt()
-                output = simplified(again) == again ? again : simplified(output)
+        if masked.replacements.isEmpty { return prose(try await translate(text)) }
+        if let restored = restore(prose(try await translate(masked.text)), masked) { return restored }
+        let plain = try await translate(text)
+        // A provider that loses placeholders gets one unmasked attempt, but it
+        // must still retain every original literal. Never publish altered names.
+        for literal in Set(masked.replacements.values) {
+            guard plain.components(separatedBy: literal).count == text.components(separatedBy: literal).count else {
+                throw BridgeError.message("系统译文未保留原文中的名称或字面量，原文已保留，请重试。")
             }
-            output = corrected(output, source: text)
         }
-        return output
+        // Remask validated literals before converting script or correcting prose.
+        var protected = plain
+        for (token, literal) in masked.replacements.sorted(by: { $0.value.count > $1.value.count }) {
+            if let range = protected.range(of: literal) { protected.replaceSubrange(range, with: token) }
+        }
+        guard let restored = restore(prose(protected), masked) else {
+            throw BridgeError.message("系统译文字面量无法完整恢复，原文已保留，请重试。")
+        }
+        return restored
     }
 }
