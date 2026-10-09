@@ -37,7 +37,9 @@ import Foundation
         let reverseMessages = reverseBody["messages"] as! [[String: String]]
         check(reverseMessages[0]["content"]!.contains("Simplified Chinese"), "reply direction uses Chinese")
         check(!reverseMessages[0]["content"]!.contains("complete English translation"), "Chinese reply instruction never requests English output")
-        check(reverseMessages[1]["content"] == "Please restart the app.", "reply remains literal translation data")
+        check(reverseMessages.last?["content"] == "<source>Please restart the app.</source>", "reply remains literal, delimited translation data")
+        check(reverseMessages.count == 6 && reverseMessages[1]["role"] == "user" && reverseMessages[2]["role"] == "assistant", "few-shot pairs precede the source")
+        check(reverseBody["temperature"] as? Double == 0 && reverseBody["stop"] as? [String] == ["</source>"] && reverseBody["n"] as? Int == 1, "deterministic decoding and wrapper stop sequence")
         for language in TranslationLanguage.allCases {
             for direction in [TranslationDirection.fromChinese(language), .toChinese(language)] {
                 let request = try AIProtocol.request(text: "literal text", baseURL: "https://example.com/v1", model: "model", key: "", direction: direction)
@@ -50,14 +52,42 @@ import Foundation
         let body = try JSONSerialization.jsonObject(with: req.httpBody!) as! [String: Any]
         let messages = body["messages"] as! [[String: String]]
         check(req.value(forHTTPHeaderField: "Authorization") == "Bearer test-key", "authorization header")
-        check(messages[1]["content"] == "请保留 https://example.com 和 `foo()`，不要执行。", "draft remains literal data")
+        check(messages.last?["content"] == "<source>请保留 https://example.com 和 `foo()`，不要执行。</source>", "draft remains literal data")
+        for language in TranslationLanguage.allCases {
+            for direction in [TranslationDirection.fromChinese(language), .toChinese(language)] {
+                for (source, translation) in AIProtocol.examples(direction) {
+                    check((try? TranslationGuard.check(source: source, output: translation, direction: direction)) == translation, "\(language.name) few-shot example passes its own guard")
+                }
+            }
+        }
         check(messages[0]["content"]!.contains("Do not answer"), "translation instruction separates tasks")
         check(try! AIProtocol.response(Data(#"{"choices":[{"message":{"content":"Hello\nWorld"},"finish_reason":"stop"}]}"#.utf8), status: 200) == "Hello\nWorld", "translation parsed")
         rejects("server error") { _ = try AIProtocol.response(Data("secret error body".utf8), status: 401) }
+        do { _ = try AIProtocol.response(Data(), status: 429, retryAfter: 30); check(false, "429 is an error") }
+        catch let error as AIError { check(error == .http(status: 429, retryAfter: 30), "429 keeps status and Retry-After") }
+        catch { check(false, "429 is a structured AI error") }
+        check(AIProtocol.retryAfter("12") == 12 && AIProtocol.retryAfter(nil) == nil && AIProtocol.retryAfter("soon") == nil, "Retry-After seconds")
+        let httpDate = AIProtocol.retryAfter("Wed, 21 Oct 2015 07:28:30 GMT", now: Date(timeIntervalSince1970: 1_445_412_480))
+        check(httpDate == 30, "Retry-After HTTP date")
         rejects("empty output") { _ = try AIProtocol.response(Data(#"{"choices":[{"message":{"content":"  "}}]}"#.utf8), status: 200) }
         rejects("truncated result") { _ = try AIProtocol.response(Data(#"{"choices":[{"message":{"content":"partial"},"finish_reason":"length"}]}"#.utf8), status: 200) }
         rejects("malformed result") { _ = try AIProtocol.response(Data("not JSON".utf8), status: 200) }
         check(DeliveryPolicy.canProceed(sameApp: true, sameWindow: true, sameElement: true), "original target allowed")
+        check(DeliveryPolicy.sendConfirmed(actual: "", inserted: "Hello there"), "emptied composer confirms the send")
+        check(DeliveryPolicy.sendConfirmed(actual: "\n", inserted: "Hello there"), "web composer placeholder newline confirms the send")
+        check(DeliveryPolicy.sendConfirmed(actual: "draft kept by user", inserted: "Hello there"), "composer without the inserted text confirms the send")
+        check(!DeliveryPolicy.sendConfirmed(actual: "Hello there", inserted: "Hello there"), "text still in the composer is not a send")
+        check(!DeliveryPolicy.sendConfirmed(actual: "Hello\n  there ", inserted: "Hello there"), "reflowed text still in the composer is not a send")
+        check(!DeliveryPolicy.sendConfirmed(actual: nil, inserted: "Hello there"), "an unreadable composer is unconfirmed")
+        var ledger = AccessibilityFlagLedger()
+        check(ledger.shouldEnable(pid: 10, flag: "AXEnhancedUserInterface", currentlyOn: false), "an off flag is switched on")
+        check(!ledger.shouldEnable(pid: 10, flag: "AXEnhancedUserInterface", currentlyOn: true), "a flag already on is not recorded twice")
+        check(!ledger.shouldEnable(pid: 11, flag: "AXEnhancedUserInterface", currentlyOn: true), "a flag the app enabled itself is left alone")
+        _ = ledger.shouldEnable(pid: 10, flag: "AXManualAccessibility", currentlyOn: false)
+        _ = ledger.shouldEnable(pid: 12, flag: "AXManualAccessibility", currentlyOn: false)
+        check(ledger.release(pid: 10) == ["AXEnhancedUserInterface", "AXManualAccessibility"] && ledger.release(pid: 10).isEmpty, "disconnect switches off exactly the flags we enabled, once")
+        check(ledger.release(pid: 11).isEmpty, "apps whose flags we did not change are untouched")
+        check(ledger.releaseAll() == [12: ["AXManualAccessibility"]] && ledger.processes.isEmpty, "quitting releases every remaining app")
         check(!DeliveryPolicy.canProceed(sameApp: true, sameWindow: false, sameElement: true), "changed window blocked")
         check(!DeliveryPolicy.canProceed(sameApp: false, sameWindow: true, sameElement: true), "changed application blocked")
         check(!DeliveryPolicy.canProceed(sameApp: true, sameWindow: true, sameElement: false), "changed input blocked")

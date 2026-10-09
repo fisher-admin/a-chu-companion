@@ -11,6 +11,8 @@ final class TranslatorModel: ObservableObject {
         var chinese: String
         var foreign: String
         var language: TranslationLanguage = .english
+        /// Claude is still writing, or the in-order Chinese is still catching up.
+        var streaming = false
     }
     @Published var history: [ChatItem] = []
     @Published var replyTextSize = ReplyTextSize(rawValue: UserDefaults.standard.integer(forKey: "replyTextSize")) ?? .medium {
@@ -31,18 +33,41 @@ final class TranslatorModel: ObservableObject {
         chatRevision += 1
     }
     func recordReply(id: String, foreign: String, chinese: String, language: TranslationLanguage) {
+        // A streamed bubble finishes in place; a re-translated older reply moves to the end.
+        if let i = history.firstIndex(where: { $0.id == id }), history[i].streaming {
+            history[i].foreign = foreign; history[i].chinese = chinese; history[i].language = language; history[i].streaming = false
+            trimHistory()
+            return
+        }
         history.removeAll { $0.id == id }
         history.append(.init(id: id, isUser: false, chinese: chinese, foreign: foreign, language: language))
         trimHistory()
         chatScrollTarget = id; chatScrollAtTop = true
         chatRevision += 1
     }
+    /// Updates a streaming bubble without moving the reader's scroll position.
+    func recordReplyProgress(id: String, foreign: String, chinese: String, language: TranslationLanguage) {
+        if let i = history.firstIndex(where: { $0.id == id }) {
+            history[i].foreign = foreign; history[i].chinese = chinese; history[i].language = language; history[i].streaming = true
+        } else {
+            history.append(.init(id: id, isUser: false, chinese: chinese, foreign: foreign, language: language, streaming: true))
+            trimHistory()
+            chatScrollTarget = id; chatScrollAtTop = true
+            chatRevision += 1
+        }
+    }
+    /// A stopped translation keeps only the verified original, never partial Chinese.
+    func markReplyStopped(id: String, foreign: String, language: TranslationLanguage) {
+        guard let i = history.firstIndex(where: { $0.id == id }) else { return }
+        history[i].foreign = foreign; history[i].language = language
+        if history[i].streaming { history[i].chinese = ""; history[i].streaming = false }
+    }
     private func trimHistory() {
-        let completed = history.filter { !$0.isUser && !$0.chinese.isEmpty }
+        let completed = history.filter { !$0.isUser && !$0.chinese.isEmpty && !$0.streaming }
         let removed = Set(completed.dropLast(10).map(\.id))
         history.removeAll { removed.contains($0.id) }
         // Bound drafts and untranslated replies too, without counting them as translations.
-        let unfinished = history.filter { $0.isUser || $0.chinese.isEmpty }
+        let unfinished = history.filter { $0.isUser || $0.chinese.isEmpty || $0.streaming }
         let extras = Set(unfinished.dropLast(20).map(\.id))
         history.removeAll { extras.contains($0.id) }
     }
@@ -124,6 +149,15 @@ final class TranslatorModel: ObservableObject {
             }
         }
         permissionMonitor.start()
+        replies.onReplyProgress = { [weak self] id, foreign, chinese, language in
+            self?.recordReplyProgress(id: id, foreign: foreign, chinese: chinese, language: language)
+        }
+        replies.onReply = { [weak self] id, foreign, chinese, language in
+            self?.recordReply(id: id, foreign: foreign, chinese: chinese, language: language)
+        }
+        replies.onReplyStopped = { [weak self] id, foreign, language in
+            self?.markReplyStopped(id: id, foreign: foreign, language: language)
+        }
     }
 
     func refreshPermission() { permissionMonitor.refresh() }
@@ -137,7 +171,11 @@ final class TranslatorModel: ObservableObject {
         guard !busy else { return }
         refreshPermission()
         do {
+            let previous = target
             target = try TargetBridge.capture()
+            if let previous, previous.app.processIdentifier != target!.app.processIdentifier {
+                TargetBridge.releaseAccessibility(pid: previous.app.processIdentifier)
+            }
             targetName = target!.name
             hasTarget = true
             status = "\(language.name)译文将填入 \(targetName) 的原输入框。"
@@ -149,6 +187,14 @@ final class TranslatorModel: ObservableObject {
         }
     }
     func report(_ message: String, error: Bool = false) { status = message; isError = error }
+    /// Stops reading, forgets the input box and switches off accessibility opt-ins in that app.
+    func disconnect() {
+        if busy { cancel() }
+        replies.stop()
+        if let target { TargetBridge.releaseAccessibility(pid: target.app.processIdentifier) }
+        target = nil; hasTarget = false; targetName = "未选择输入框"
+        report("已断开 Claude。点击 Claude 输入框，再按 ⌃⌥E 重新连接。")
+    }
     func saveSettings(key: String, replaceKey: Bool) throws {
         if engine == "ai" {
             _ = try AIProtocol.request(text: "测试", baseURL: baseURL, model: aiModel, key: "")
@@ -178,15 +224,20 @@ final class TranslatorModel: ObservableObject {
             chatRevision += 1
             report(engine == "apple" ? "正在使用系统翻译… 首次使用可能需要下载语言包。" : "正在翻译…")
             if useAI {
+                // AI output is checked before it can be pasted or sent; anything rejected,
+                // slow or rate-limited is translated by the system instead.
+                let replies = self.replies
+                let translator = FailoverTranslator(preferAI: true, circuit: replies.circuit,
+                                                    ai: FailoverTranslator.openAICompatible(baseURL: base, model: model, key: key),
+                                                    system: { text, direction in try await replies.systemTranslator.translate(text, direction: direction) })
+                var fallback: FallbackReason?
+                translator.onFallback = { reason in fallback = reason }
                 task = Task {
                     do {
                         let result = try await TextTranslation.run(text, progress: { [weak self] part, total in
                             self?.report("正在翻译为\(job.language.name)… \(part) / \(total) 段")
-                        }) { chunk in
-                            let request = try AIProtocol.request(text: chunk, baseURL: base, model: model, key: key, direction: .fromChinese(job.language))
-                            return try await AITranslator.translate(request)
-                        }
-                        try await finish(result, job: job)
+                        }) { chunk in try await translator.translate(chunk, direction: .fromChinese(job.language)) }
+                        try await finish(result, job: job, fallback: fallback)
                     } catch { failed(error, id: job.id) }
                 }
             } else {
@@ -215,7 +266,7 @@ final class TranslatorModel: ObservableObject {
             try await finish(result, job: job)
         } catch { failed(error, id: job.id) }
     }
-    private func finish(_ translated: String, job: Job) async throws {
+    private func finish(_ translated: String, job: Job, fallback: FallbackReason? = nil) async throws {
         guard activeID == job.id, !Task.isCancelled else { return }
         guard !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw BridgeError.message("翻译结果为空，请重试。") }
         try ForeignTextPolicy.validate(translated, incoming: false)
@@ -224,16 +275,20 @@ final class TranslatorModel: ObservableObject {
         chatRevision += 1
         if job.insert, let target = job.target {
             report("翻译完成，正在检查原输入框…")
+            let note = fallback.map { " " + $0.message } ?? ""
             let outcome = try await TargetBridge.deliver(translated, to: target, autoSend: job.send,
                                                         commandReturn: job.commandReturn)
             guard activeID == job.id else { return }
             switch outcome {
-            case .inserted: report("已填入 \(target.name)，由你确认后发送。")
-            case .sendKeyPressed:
-                report("已填入 \(target.name) 并按下发送快捷键，请以目标软件的显示为准。")
+            case .inserted: report("已填入 \(target.name)，由你确认后发送。" + note)
+            case .sent:
+                report("已发送到 \(target.name)：输入框已清空。" + note)
                 if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.app.processIdentifier {
                     revealWindow()
                 }
+            case .sendUnconfirmed:
+                report("已按下发送键，但 \(target.name) 的输入框仍保留译文，可能 Claude 仍在回复。请检查后手动发送。", error: true)
+                revealWindow()
             case .unconfirmed:
                 report("已尝试粘贴，但目标软件未提供可核对的文字。没有自动发送，请检查输入框。", error: true)
                 revealWindow()
@@ -242,7 +297,7 @@ final class TranslatorModel: ObservableObject {
             self.target = target
             hasTarget = true
             if input == job.text { input = "" }
-        } else { report("翻译完成，可以检查或复制译文。") }
+        } else { report("翻译完成，可以检查或复制译文。" + (fallback.map { " " + $0.message } ?? "")) }
         busy = false; pending = nil; activeID = nil; appleSession = nil
     }
     func insertResult() {

@@ -100,11 +100,112 @@ import AppKit
         model.clearHistory()
         precondition(model.history.isEmpty && model.replies.watching && model.input == "清除记录时保留草稿")
         print("PASS: only the latest ten completed reply translations are retained; clear preserves reading and drafts")
+        try await streamingTests()
         let fresh = TranslatorModel(permissionCheck: { true })
         precondition(fresh.history.isEmpty && fresh.language == .german && fresh.replyTextSize == .large)
         fresh.stopPermissionMonitoring()
         print("PASS: a new application restores language and font size but has no persisted chat records")
-        print("16 multilingual model tests passed")
+        print("26 multilingual model tests passed")
+    }
+
+    @MainActor static func streamingTests() async throws {
+        let item = TargetBridge.privateItem("secret draft")
+        precondition(item.string(forType: .string) == "secret draft" && item.types.contains(TargetBridge.transientType) && item.types.contains(TargetBridge.concealedType))
+        print("PASS: pasted translations carry transient and concealed clipboard markers")
+
+        let model = TranslatorModel(permissionCheck: { true })
+        defer { model.stopPermissionMonitoring() }
+        let replies = model.replies
+        var preferAI = false
+        var aiCalls = 0
+        replies.translatorFactory = {
+            FailoverTranslator(preferAI: preferAI, aiTimeout: { _ in .seconds(2) },
+                               ai: { text, _ in
+                                   aiCalls += 1
+                                   if text.contains("LIMIT") { throw AIError.http(status: 429, retryAfter: nil) }
+                                   return String(repeating: "译", count: max(2, text.count / 3))
+                               },
+                               system: { text, _ in try await Task.sleep(for: .milliseconds(text.hasPrefix("First") ? 40 : 5)); return "〔" + text + "〕" })
+        }
+        var usageRefreshes = 0
+        replies.onReplyObserved = { usageRefreshes += 1 }
+        let url = "https://claude.ai/chat/stream-e2e"
+        let user = ChatMessage(ordinal: 1, author: .user, text: "Explain")
+        func snapshot(_ text: String, complete: Bool, conversation: String = url, composer: Bool = true) -> ReplySnapshot {
+            ReplySnapshot(conversation: conversation, messages: [user, .init(ordinal: 2, author: .assistant, text: text)],
+                          foundTranscript: true, responseComplete: complete, foundComposer: composer)
+        }
+        replies.watching = true
+        try replies.process(ReplySnapshot(conversation: url, messages: [user], foundTranscript: true, responseComplete: false))
+        let full = "First sentence arrives quickly here. Second sentence follows right after. Third one finishes the reply."
+        var sawPartial = false, sawStreamingOriginal = false
+        for step in stride(from: 8, to: full.count, by: 6) {
+            try replies.process(snapshot(String(full.prefix(step)), complete: false))
+            for _ in 0..<5 { await Task.yield() }
+            try await Task.sleep(for: .milliseconds(15))
+            if let bubble = model.history.last, bubble.streaming {
+                sawStreamingOriginal = sawStreamingOriginal || bubble.foreign == String(full.prefix(step))
+                sawPartial = sawPartial || bubble.chinese.hasPrefix("〔First sentence arrives quickly here.〕")
+            }
+        }
+        precondition(sawStreamingOriginal && sawPartial && replies.translating)
+        print("PASS: the original and the first translated sentence appear while Claude is still writing")
+        try replies.process(snapshot(full, complete: true))
+        try await waitUntil { model.history.last?.streaming == false }
+        let expected = "〔First sentence arrives quickly here.〕 〔Second sentence follows right after.〕 〔Third one finishes the reply.〕"
+        precondition(model.history.last?.chinese == expected && model.history.last?.foreign == full && !replies.translating)
+        precondition(model.history.filter { !$0.isUser }.count == 1 && usageRefreshes == 1)
+        print("PASS: the finished reply is assembled in source order in the same bubble, refreshing usage once")
+
+        let url2 = "https://claude.ai/chat/stream-cancel"
+        try replies.process(ReplySnapshot(conversation: url2, messages: [user], foundTranscript: true, responseComplete: false))
+        try replies.process(snapshot("First sentence arrives quickly here. Second", complete: false, conversation: url2))
+        replies.cancelTranslation()
+        precondition(!replies.translating && model.history.last?.streaming == false && model.history.last?.chinese.isEmpty == true)
+        try replies.process(snapshot("First sentence arrives quickly here. Second sentence is done.", complete: true, conversation: url2))
+        try await Task.sleep(for: .milliseconds(80))
+        precondition(!replies.translating && model.history.last?.chinese.isEmpty == true && model.history.last?.foreign.hasSuffix("done.") == true && replies.canRetry)
+        print("PASS: a cancelled reply stays cancelled while Claude keeps writing, and keeps its latest original")
+        replies.retry()
+        try await waitUntil { model.history.last?.streaming == false && model.history.last?.chinese.isEmpty == false }
+        precondition(model.history.last?.chinese == "〔First sentence arrives quickly here.〕 〔Second sentence is done.〕")
+        print("PASS: retry translates the complete current text")
+
+        preferAI = true
+        let url3 = "https://claude.ai/chat/stream-fallback"
+        try replies.process(ReplySnapshot(conversation: url3, messages: [user], foundTranscript: true, responseComplete: false))
+        try replies.process(snapshot("This opening sentence is translated by AI. This LIMIT sentence is rate limited by AI. The closing sentence uses AI again.", complete: true, conversation: url3))
+        try await waitUntil { model.history.last?.streaming == false && model.history.last?.chinese.isEmpty == false }
+        let mixed = model.history.last?.chinese ?? ""
+        precondition(mixed.hasPrefix("译") && mixed.contains("〔This LIMIT sentence is rate limited by AI.〕") && mixed.hasSuffix("译"))
+        precondition(replies.fallbackNotice == FallbackReason.rateLimited.message && replies.status.contains("已改用系统翻译") && aiCalls == 3)
+        print("PASS: a rate-limited segment falls back to system translation in place and the fallback is shown")
+
+        var clock = Date(timeIntervalSince1970: 0)
+        replies.now = { clock }
+        replies.structureTimeout = 45
+        let structural = ReplyReadPending(message: "未识别到 Claude 消息标记。", structural: true)
+        replies.handleReadFailure(structural)
+        precondition(replies.readError == nil && replies.status.contains("等待 Claude 界面就绪"))
+        clock += 30
+        replies.handleReadFailure(ReplyReadPending(message: "正文尚未就绪"))
+        replies.handleReadFailure(structural)
+        precondition(replies.readError == nil)
+        clock += 16
+        replies.handleReadFailure(structural)
+        precondition(replies.readError == .uiStructureChanged("未识别到 Claude 消息标记。") && replies.status.contains("界面结构已变化") && replies.watching)
+        print("PASS: structure failures lasting 45 seconds escalate to a visible interface-change error without stopping")
+        try replies.process(snapshot("Recovered reply text is here.", complete: true, conversation: url3))
+        precondition(replies.readError == nil && !replies.status.contains("界面结构已变化"))
+        print("PASS: a readable snapshot clears the interface-change error")
+        try replies.process(snapshot("Recovered reply text is here.", complete: true, conversation: url3, composer: false))
+        clock += 46
+        try replies.process(snapshot("Recovered reply text is here.", complete: true, conversation: url3, composer: false))
+        precondition(replies.readError == .uiStructureChanged("未找到 Claude 输入框"))
+        print("PASS: a composer that stays missing escalates the same way")
+        replies.stop()
+        precondition(replies.readError == nil)
+        print("PASS: stopping clears the escalation state")
     }
 
     @MainActor static func waitUntil(_ condition: () -> Bool) async throws {

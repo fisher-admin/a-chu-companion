@@ -12,7 +12,12 @@ final class TargetBridge {
         let conversation: String?
         var name: String { app.localizedName ?? "目标软件" }
     }
-    enum Outcome { case inserted, sendKeyPressed, unconfirmed }
+    enum Outcome { case inserted, sent, sendUnconfirmed, unconfirmed }
+    /// Markers from nspasteboard.org: clipboard managers skip transient items and never store concealed ones.
+    static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+    static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+    private static var accessibilityFlags = AccessibilityFlagLedger()
+    private static let optInFlags = ["AXManualAccessibility", "AXEnhancedUserInterface"]
 
     static var trusted: Bool { AXIsProcessTrusted() }
     static func requestPermission() {
@@ -45,8 +50,11 @@ final class TargetBridge {
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(axApp, 1)
         // Electron/Chromium expose focused controls after this accessibility opt-in.
-        AXUIElementSetAttributeValue(axApp, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        AXUIElementSetAttributeValue(axApp, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        // Only flags we switch on are recorded, so disconnecting restores the app's own setting.
+        for flag in optInFlags where accessibilityFlags.shouldEnable(pid: app.processIdentifier, flag: flag,
+                                                                      currentlyOn: attribute(axApp, flag) as? Bool == true) {
+            AXUIElementSetAttributeValue(axApp, flag as CFString, kCFBooleanTrue)
+        }
         guard let element = elementAttribute(axApp, kAXFocusedUIElementAttribute),
               let role = attribute(element, kAXRoleAttribute) as? String,
               [kAXTextAreaRole, kAXTextFieldRole, kAXComboBoxRole].contains(role),
@@ -58,6 +66,23 @@ final class TargetBridge {
         return Target(app: app, element: element, window: window,
                       value: attribute(element, kAXValueAttribute) as? String, selection: selectedRange(element), conversation: conversationURL(element))
     }
+    static func privateItem(_ text: String) -> NSPasteboardItem {
+        let item = NSPasteboardItem()
+        item.setString(text, forType: .string)
+        item.setData(Data(), forType: transientType)
+        item.setData(Data(), forType: concealedType)
+        return item
+    }
+    /// Switches off the Chromium/Electron accessibility opt-ins this companion enabled. Full
+    /// accessibility trees slow those apps down and confuse window managers.
+    static func releaseAccessibility(pid: pid_t) {
+        let flags = accessibilityFlags.release(pid: pid)
+        guard !flags.isEmpty, NSRunningApplication(processIdentifier: pid)?.isTerminated == false else { return }
+        let axApp = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(axApp, 1)
+        for flag in flags { AXUIElementSetAttributeValue(axApp, flag as CFString, kCFBooleanFalse) }
+    }
+    static func releaseAllAccessibility() { accessibilityFlags.processes.forEach(releaseAccessibility) }
     static func conversationURL(_ element: AXUIElement) -> String? {
         var cursor: AXUIElement? = element
         for _ in 0..<30 {
@@ -134,7 +159,7 @@ final class TargetBridge {
             }
         }
         board.clearContents()
-        guard board.setString(text, forType: .string) else { throw BridgeError.message("无法写入剪贴板。") }
+        guard board.writeObjects([privateItem(text)]) else { throw BridgeError.message("无法写入剪贴板。") }
         let ownedCount = board.changeCount
         defer {
             if DeliveryPolicy.restoreClipboard(ownedCount: ownedCount, currentCount: board.changeCount) {
@@ -171,6 +196,11 @@ final class TargetBridge {
         guard matches(target) else { throw BridgeError.message("输入焦点已改变，未自动发送。") }
         _ = try validatedConversation(target)
         try key(36, flags: commandReturn ? .maskCommand : [], pid: target.app.processIdentifier)
-        return .sendKeyPressed
+        // Claude ignores the key while it is still answering; only an emptied composer proves the send.
+        for _ in 0..<60 {
+            try await Task.sleep(for: .milliseconds(50))
+            if DeliveryPolicy.sendConfirmed(actual: attribute(target.element, kAXValueAttribute) as? String, inserted: text) { return .sent }
+        }
+        return .sendUnconfirmed
     }
 }

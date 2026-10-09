@@ -32,12 +32,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.level = .floating
         (window as? NSPanel)?.hidesOnDeactivate = false
         model.replies.showPanel = { [weak self] in self?.window.orderFrontRegardless() }
-        model.replies.onReplyAcquired = { [weak self] id, foreign, language in
-            self?.model.recordReplyOriginal(id: id, foreign: foreign, language: language)
-        }
-        model.replies.onReply = { [weak self] id, foreign, chinese, language in
-            self?.model.recordReply(id: id, foreign: foreign, chinese: chinese, language: language)
-        }
         model.replies.onReplyObserved = { [weak self] in self?.usage.refresh() }
         usage.refresh()
         model.revealWindow = { [weak self] in self?.show(capture: false) }
@@ -97,7 +91,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         show(capture: false); return true
     }
-    func applicationWillTerminate(_ notification: Notification) { model.replies.stop(); model.stopPermissionMonitoring(); usage.stop() }
+    func applicationWillTerminate(_ notification: Notification) {
+        model.replies.stop(); model.stopPermissionMonitoring(); usage.stop()
+        TargetBridge.releaseAllAccessibility()
+    }
 }
 
 @main struct AChuCompanionApp {

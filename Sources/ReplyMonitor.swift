@@ -2,44 +2,85 @@ import AppKit
 import SwiftUI
 import Translation
 
+enum ReplyReadError: LocalizedError, Equatable {
+    case uiStructureChanged(String)
+    var errorDescription: String? {
+        switch self {
+        case let .uiStructureChanged(detail):
+            return "Claude 界面结构已变化，暂时无法读取回复（\(detail)）。请确认 Claude 窗口仍显示对话；Claude 更新后如仍无法读取，请重新按 ⌃⌥E 连接或更新A畜伴侣。"
+        }
+    }
+}
+
 @MainActor final class ReplyMonitor: ObservableObject {
     @Published var watching = false
-    @Published var translating = false
-    @Published var reverseConfiguration: TranslationSession.Configuration?
-    @Published private(set) var systemTaskID: UUID?
-    private var systemJob: (candidate: ReplyCandidate, session: UUID, attempt: UUID)?
+    @Published private(set) var translating = false
     @Published var status = ""
     @Published var original = ""
     @Published var chinese = ""
     @Published var sourceName = "Claude"
-    var showPanel: () -> Void = {}
-    var onReply: (String, String, String, TranslationLanguage) -> Void = { _, _, _, _ in }
-    var onReplyAcquired: (String, String, TranslationLanguage) -> Void = { _, _, _ in }
-    var onReplyObserved: () -> Void = {}
-    private var lastUsageCandidate: ReplyCandidate?
-    private var source: ClaudeSource?
-    private var tracker: ConversationReplyTracker?
-    private var queue = ReplyWorkQueue()
+    /// Set after Claude's transcript, message markers or composer stay unresolvable.
+    @Published private(set) var readError: ReplyReadError?
+    /// Why the latest reply used system translation instead of AI, if it did.
+    @Published private(set) var fallbackNotice: String?
     @Published var historyChoices: [ReplyWork] = []
     @Published var showHistoryPicker = false
+    let circuit = AICircuit()
+    let systemTranslator = SystemTranslator()
+    let broker = SystemSessionBroker()
+    var showPanel: () -> Void = {}
+    /// Partial original and in-order partial Chinese while a reply streams.
+    var onReplyProgress: (String, String, String, TranslationLanguage) -> Void = { _, _, _, _ in }
+    /// The finished reply and its complete translation.
+    var onReply: (String, String, String, TranslationLanguage) -> Void = { _, _, _, _ in }
+    /// A reply whose translation was stopped; only its original remains valid.
+    var onReplyStopped: (String, String, TranslationLanguage) -> Void = { _, _, _ in }
+    var onReplyObserved: () -> Void = {}
+    var now: () -> Date = Date.init
+    var structureTimeout: TimeInterval = 45
+    /// Test hook; production builds translators from the current settings.
+    var translatorFactory: (() -> FailoverTranslator)?
+
+    private final class LiveReply {
+        let id: String, ordinal: Int, conversation: String, manual: Bool
+        let pipeline: StreamTranslationPipeline
+        var text = ""
+        /// Claude finished writing this text; the pipeline has been told so.
+        var sourceComplete = false
+        var done = false
+        /// Stopped by the user or a session change; only an explicit retry restarts it.
+        var stopped = false
+        init(id: String, ordinal: Int, conversation: String, manual: Bool, pipeline: StreamTranslationPipeline) {
+            self.id = id; self.ordinal = ordinal; self.conversation = conversation; self.manual = manual; self.pipeline = pipeline
+        }
+    }
+
+    private var lastUsageCandidate: ReplyCandidate?
+    private var source: ClaudeSource?
+    private var tracker: StreamingReplyTracker?
+    private var live: [String: LiveReply] = [:]
+    private var latestID: String?
     private var historyRequestID: UUID?
-    private var versionConversation = ""
-    private var manualVersion = false
     private var polling: Task<Void, Never>?
-    private var translation: Task<Void, Never>?
-    private var replyTimeout: Task<Void, Never>?
-    private var replyLifecycle = ReplyTranslationLifecycle()
     private var sessionID = UUID()
-    private var version: ReplyCandidate?
     private var language: TranslationLanguage = .english
-    private var activeSession: TranslationSession?
     private var engine = "apple"
     private var baseURL = ""
     private var model = ""
     private var errors = 0
+    private var structuralSince: Date?
+
+    init() {
+        systemTranslator.sessionProvider = { [weak broker] direction in
+            guard let broker else { throw CancellationError() }
+            return try await broker.session(for: direction)
+        }
+        broker.onNeedsPresentation = { [weak self] in self?.showPanel() }
+    }
+
     var canRetry: Bool {
-        guard !translating, chinese.isEmpty, !original.isEmpty, original.count <= ForeignTextPolicy.limit, let version else { return false }
-        return isReplyCurrent(version)
+        guard !translating, let id = latestID, let reply = live[id], reply.text.count <= ForeignTextPolicy.limit else { return false }
+        return reply.stopped || (reply.done && !reply.pipeline.state.failedSegments.isEmpty)
     }
 
     func connect(target: TargetBridge.Target, engine: String, baseURL: String, model: String, language: TranslationLanguage = .english) async {
@@ -58,17 +99,23 @@ import Translation
             guard sessionID == token, watching else { return }
             self.source = source
             errors = 0
-            status = "已连接 Claude，持续读取正式回复。"
+            status = "已连接 Claude，边接收边翻译正式回复。"
             startPolling()
         } catch { if sessionID == token { pause("读取未启动：" + error.localizedDescription) } }
     }
+
     func configure(engine: String, baseURL: String, model: String, language: TranslationLanguage) {
         guard self.engine != engine || self.baseURL != baseURL || self.model != model || self.language != language else { return }
+        let engineChanged = self.engine != engine || self.baseURL != baseURL || self.model != model
         self.engine = engine; self.baseURL = baseURL; self.model = model; self.language = language
-        cancelReplyTranslation(resetSystemSession: true)
-        tracker = nil; queue.clear(); version = nil; lastUsageCandidate = nil
+        stopAll()
+        // Re-reading from a fresh baseline translates the current reply again with the new settings.
+        tracker = nil; lastUsageCandidate = nil; fallbackNotice = nil
+        systemTranslator.reset(); broker.reset()
+        if engineChanged { circuit.reset() }
         if watching { status = "翻译设置已更新，继续读取当前会话…" }
     }
+
     func startPolling() {
         guard watching, let source, polling == nil else { return }
         showPanel()
@@ -76,41 +123,41 @@ import Translation
         polling = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, self.sessionID == token, self.watching else { return }
+                var interval: Duration = .seconds(1)
                 do {
                     let snapshot = try await source.capture()
                     guard self.sessionID == token, self.watching else { return }
-                    if self.tracker?.conversation != snapshot.conversation {
-                        if !self.manualVersion {
-                            self.cancelReplyTranslation(resetSystemSession: true)
-                            self.version = nil
-                        }
-                        self.queue.removeAutomatic(); self.lastUsageCandidate = nil
-                        self.tracker = ConversationReplyTracker(baseline: snapshot.messages, conversation: snapshot.conversation)
-                        self.status = "已跟随当前 Claude 会话，持续读取正式回复。"
-                    }
-                    let candidates = try self.tracker?.observe(conversation: snapshot.conversation, messages: snapshot.messages,
-                                                              responseComplete: snapshot.responseComplete,
-                                                              now: Date().timeIntervalSinceReferenceDate) ?? []
-                    self.errors = 0
-                    if let current = self.version, !self.manualVersion, self.translating, !self.isReplyCurrent(current) {
-                        self.cancelReplyTranslation(resetSystemSession: true)
-                    }
-                    for candidate in candidates {
-                        if self.version == candidate && self.versionConversation == snapshot.conversation { continue }
-                        self.queue.add(ReplyWork(candidate: candidate, conversation: snapshot.conversation))
-                    }
-                    self.continueReplies()
-                    if !self.translating && !snapshot.responseComplete {
-                        self.status = "Claude 正在运行，等待完整正式回复…"
-                    }
+                    try self.process(snapshot)
+                    // Poll faster while text is arriving so segments start translating sooner.
+                    if !snapshot.responseComplete || self.translating { interval = .milliseconds(500) }
                 } catch {
                     guard self.sessionID == token else { return }
                     self.handleReadFailure(error)
                 }
-                try? await Task.sleep(for: .seconds(1))
+                if self.readError != nil { interval = .seconds(3) }
+                try? await Task.sleep(for: interval)
             }
         }
     }
+
+    /// Applies one verified snapshot of the bound conversation.
+    func process(_ snapshot: ReplySnapshot) throws {
+        if tracker?.conversation != snapshot.conversation {
+            for reply in live.values where !reply.manual && !reply.done { stop(reply) }
+            lastUsageCandidate = nil
+            tracker = StreamingReplyTracker(baseline: snapshot.messages, conversation: snapshot.conversation)
+            status = "已跟随当前 Claude 会话，边接收边翻译正式回复。"
+        }
+        guard var current = tracker else { return }
+        let progress = try current.observe(conversation: snapshot.conversation, messages: snapshot.messages, responseComplete: snapshot.responseComplete)
+        tracker = current
+        errors = 0
+        if snapshot.foundComposer { recovered() } else { noteStructural("未找到 Claude 输入框") }
+        for item in progress { advance(item, conversation: snapshot.conversation, manual: false) }
+        updateTranslating()
+        if !translating && !snapshot.responseComplete && readError == nil { status = "Claude 正在运行，等待正式回复文字…" }
+    }
+
     func readVisible(target: TargetBridge.Target, engine: String, baseURL: String, model: String, language: TranslationLanguage) async {
         configure(engine: engine, baseURL: baseURL, model: model, language: language)
         let request = UUID(); historyRequestID = request
@@ -136,226 +183,203 @@ import Translation
             status = "读取当前回复失败：" + error.localizedDescription
         }
     }
+
     func selectHistoryReply(_ work: ReplyWork) {
         guard work.manual, historyChoices.contains(work) else { return }
         showHistoryPicker = false; historyChoices = []
-        if translating && version == work.candidate && versionConversation == work.conversation {
+        if let reply = live[work.id], reply.text == work.candidate.text, !reply.done, !reply.stopped {
             status = "这条回复正在翻译，请稍候。"
             return
         }
-        queue.add(work)
-        continueReplies()
+        advance(ReplyProgress(candidate: work.candidate, complete: true), conversation: work.conversation, manual: true, restart: true)
+        updateTranslating()
     }
-    private func continueReplies() {
-        guard !translating else { return }
-        while let work = queue.pop() {
-            guard work.manual || (watching && tracker?.conversation == work.conversation && tracker?.isCurrent(work.candidate) == true) else { continue }
-            translate(work.candidate, conversation: work.conversation, manual: work.manual, token: sessionID)
-            return
-        }
-    }
-    private func isReplyCurrent(_ candidate: ReplyCandidate) -> Bool {
-        guard version == candidate else { return false }
-        return manualVersion || (tracker?.conversation == versionConversation && tracker?.isCurrent(candidate) == true)
-    }
-    private func replyID(_ candidate: ReplyCandidate) -> String {
-        ReplyIdentity.id(conversation: versionConversation, ordinal: candidate.ordinal)
-    }
+
     func handleReadFailure(_ error: Error) {
         if let pending = error as? ReplyReadPending {
-            // Thinking, tool use and streaming may leave the latest card
-            // unreadable for minutes. Preserve the verified baseline and
-            // never feed a partial snapshot to the tracker.
+            // Thinking, tool use and streaming may leave the latest card unreadable for
+            // minutes; that is normal. Only structural failures count toward escalation.
             errors = 0
-            status = "等待 Claude 原文，自动读取会继续检查。" + pending.localizedDescription
+            if pending.structural { noteStructural(pending.message) }
+            else if readError == nil { status = "等待 Claude 原文，自动读取会继续检查。" + pending.localizedDescription }
         } else {
             errors += 1
             if errors >= 5 { pause(error.localizedDescription) }
-            else { status = "正在重新检查 Claude 页面…" }
+            else if readError == nil { status = "正在重新检查 Claude 页面…" }
         }
     }
+
     func reportReplyObserved(_ candidate: ReplyCandidate) {
         if lastUsageCandidate != candidate {
             lastUsageCandidate = candidate
             onReplyObserved()
         }
     }
-    private func translate(_ candidate: ReplyCandidate, conversation: String, manual: Bool, token: UUID) {
-        reportReplyObserved(candidate)
-        cancelReplyTranslation(resetSystemSession: false)
-        let attempt = replyLifecycle.begin()
-        version = candidate; versionConversation = conversation; manualVersion = manual; original = candidate.text; chinese = ""; translating = replyLifecycle.isTranslating
-        onReplyAcquired(replyID(candidate), candidate.text, language)
-        do { try ForeignTextPolicy.validate(candidate.text, incoming: true) }
-        catch { cancelReplyTranslation(resetSystemSession: true); status = error.localizedDescription; continueReplies(); return }
-        if engine == "apple" {
-            status = "原文已读取，正在检查翻译语言…"
-            let job = (candidate: candidate, session: token, attempt: attempt)
-            systemJob = job
-            reverseConfiguration = nil; systemTaskID = nil
-            let from = Locale.Language(identifier: language.rawValue)
-            let to = Locale.Language(identifier: "zh-Hans")
-            translation = Task {
-                do {
-                    let installed = try await TextTranslation.withDeadline(timeout: .seconds(10)) {
-                        await LanguageAvailability().status(from: from, to: to) == .installed ? "installed" : "download"
-                    }
-                    guard isCurrent(job), !Task.isCancelled else { return }
-                    if installed == "installed", #available(macOS 26.0, *) {
-                        // Installed packs do not need a view-provided session or a download prompt.
-                        let session = TranslationSession(installedSource: from, target: to)
-                        await runSystemReply(session, attempt: attempt, prepare: false)
-                    } else {
-                        status = "原文已读取，正在启动系统翻译…"
-                        systemTaskID = attempt
-                        reverseConfiguration = .init(source: from, target: to)
-                        armReplyTimeout(candidate, token: token, attempt: attempt, stage: "翻译任务启动", after: .seconds(20))
-                    }
-                } catch { translationFailed(error, candidate: candidate, token: token, attempt: attempt) }
-            }
-            return
-        }
-        status = "正在把 Claude 的回复翻译成中文…"
-        let base = baseURL; let model = self.model
-        translation = Task {
-            do {
-                let key = try Credentials.read(); let language = self.language
-                let translated = try await TextTranslation.run(candidate.text, progress: { [weak self] part, total in
-                    self?.status = "正在把回复译回中文… \(part) / \(total) 段"
-                }) { chunk in
-                    let request = try AIProtocol.request(text: chunk, baseURL: base, model: model, key: key, direction: .toChinese(language))
-                    return try await AITranslator.translate(request)
-                }
-                commit(translated, candidate: candidate, token: token, attempt: attempt)
-            } catch { translationFailed(error, candidate: candidate, token: token, attempt: attempt) }
-        }
-    }
-    func runSystemReply(_ session: TranslationSession, attempt: UUID, prepare: Bool = true) async {
-        guard let job = systemJob, job.attempt == attempt, isCurrent(job) else { return }
-        do {
-            activeSession = session
-            replyTimeout?.cancel(); replyTimeout = nil
-            if prepare {
-                status = "原文已读取，正在准备翻译语言…"
-                _ = try await TextTranslation.withDeadline { try await session.prepareTranslation(); return "" }
-            }
-            guard isCurrent(job) else { return }
-            let translated = try await TextTranslation.run(job.candidate.text, progress: { [weak self] part, total in
-                self?.status = "正在把回复译回中文… \(part) / \(total) 段"
-            }) { chunk in
-                guard self.isCurrent(job) else { throw CancellationError() }
-                let value = try await session.translate(chunk).targetText
-                guard self.isCurrent(job) else { throw CancellationError() }
-                return value
-            }
-            commit(translated, candidate: job.candidate, token: job.session, attempt: job.attempt)
-        } catch { translationFailed(error, candidate: job.candidate, token: job.session, attempt: job.attempt) }
-    }
-    private func isCurrent(_ job: (candidate: ReplyCandidate, session: UUID, attempt: UUID)) -> Bool {
-        sessionID == job.session && version == job.candidate && replyLifecycle.isCurrent(job.attempt)
-    }
-    private func armReplyTimeout(_ candidate: ReplyCandidate, token: UUID, attempt: UUID, stage: String, after duration: Duration) {
-        replyTimeout?.cancel()
-        replyTimeout = Task { [weak self] in
-            do { try await Task.sleep(for: duration) } catch { return }
-            self?.replyTranslationTimedOut(candidate, token: token, attempt: attempt, stage: stage)
-        }
-    }
-    private func replyTranslationTimedOut(_ candidate: ReplyCandidate, token: UUID, attempt: UUID, stage: String) {
-        guard sessionID == token, version == candidate, replyLifecycle.finish(attempt) else { return }
-        defer { continueReplies() }
-        replyTimeout = nil
-        translation?.cancel(); translation = nil
-        let timedOutSystemJob = systemJob?.attempt == attempt
-        systemJob = nil
-        if timedOutSystemJob { reverseConfiguration = nil; systemTaskID = nil }
-        translating = replyLifecycle.isTranslating
-        if !isReplyCurrent(candidate) {
-            status = "Claude 正在回复，等待文字稳定…"
-        } else {
-            status = "回复翻译超时（\(stage)），可点击重试。"
-        }
-    }
-    private func commit(_ result: String, candidate: ReplyCandidate, token: UUID, attempt: UUID) {
-        guard sessionID == token, version == candidate, replyLifecycle.finish(attempt) else { return }
-        defer { continueReplies() }
-        activeSession = nil
-        replyTimeout?.cancel(); replyTimeout = nil
-        if systemJob?.attempt == attempt { systemJob = nil }
-        translation = nil
-        translating = replyLifecycle.isTranslating
-        guard isReplyCurrent(candidate) else {
-            status = "Claude 正在回复，等待文字稳定…"
-            return
-        }
-        guard !Task.isCancelled else {
-            status = "回复翻译已取消，可点击重试。"
-            return
-        }
-        chinese = result
-        onReply(replyID(candidate), candidate.text, result, language)
-        status = "中文译文已更新。若 Claude 继续补充，译文会随之更新。"
-    }
-    private func translationFailed(_ error: Error, candidate: ReplyCandidate, token: UUID, attempt: UUID) {
-        guard sessionID == token, version == candidate, replyLifecycle.finish(attempt) else { return }
-        defer { continueReplies() }
-        if #available(macOS 26.0, *) { activeSession?.cancel() }
-        activeSession = nil
-        replyTimeout?.cancel(); replyTimeout = nil
-        if systemJob?.attempt == attempt { systemJob = nil }
-        translation = nil
-        translating = replyLifecycle.isTranslating
-        guard isReplyCurrent(candidate) else {
-            status = "Claude 正在回复，等待文字稳定…"
-            return
-        }
-        if Task.isCancelled || error is CancellationError {
-            status = "回复翻译已取消，可点击重试。"
-        } else {
-            status = "回复翻译失败：" + error.localizedDescription
-                + (original.count <= ForeignTextPolicy.limit ? "；可点击重试。" : "")
-        }
-    }
-    private func cancelReplyTranslation(resetSystemSession: Bool) {
-        let hadSystemJob = systemJob != nil
-        if #available(macOS 26.0, *) { activeSession?.cancel() }
-        activeSession = nil
-        replyTimeout?.cancel(); replyTimeout = nil
-        translation?.cancel(); translation = nil
-        if let attempt = replyLifecycle.activeID { _ = replyLifecycle.cancel(attempt) }
-        systemJob = nil
-        translating = replyLifecycle.isTranslating
-        if resetSystemSession && hadSystemJob { reverseConfiguration = nil; systemTaskID = nil }
-    }
+
     func cancelTranslation() {
         guard translating else { return }
-        cancelReplyTranslation(resetSystemSession: true)
+        for reply in live.values where !reply.done { stop(reply) }
+        updateTranslating()
         status = "回复翻译已取消，可点击重试。"
     }
+
     func retry() {
-        guard canRetry, let candidate = version else { return }
-        translate(candidate, conversation: versionConversation, manual: manualVersion, token: sessionID)
+        guard canRetry, let id = latestID, let reply = live[id] else { return }
+        if reply.stopped {
+            advance(ReplyProgress(candidate: ReplyCandidate(ordinal: reply.ordinal, text: reply.text), complete: reply.sourceComplete),
+                    conversation: reply.conversation, manual: reply.manual, restart: true)
+        } else {
+            reply.done = false
+            fallbackNotice = nil
+            reply.pipeline.retryFailed()
+        }
+        updateTranslating()
     }
-    private func pause(_ message: String) {
-        watching = false; cancelReplyTranslation(resetSystemSession: true); polling?.cancel(); polling = nil
-        reverseConfiguration = nil
-        systemTaskID = nil
-        status = message
-    }
+
     func clearRecords() {
-        cancelReplyTranslation(resetSystemSession: true)
-        queue.clear(); version = nil; original = ""; chinese = ""
+        stopAll()
+        live = [:]; latestID = nil; original = ""; chinese = ""
         historyRequestID = nil; historyChoices = []; showHistoryPicker = false
         status = watching ? "本地记录已清除，继续读取 Claude 的新回复。" : "本地记录已清除。"
     }
+
     func stop(clear: Bool = false) {
         sessionID = UUID(); watching = false
-        polling?.cancel(); polling = nil; cancelReplyTranslation(resetSystemSession: true)
-        source = nil; tracker = nil; queue.clear(); version = nil; lastUsageCandidate = nil
+        polling?.cancel(); polling = nil
+        stopAll()
+        source = nil; tracker = nil; lastUsageCandidate = nil
         historyRequestID = nil; historyChoices = []; showHistoryPicker = false
-        reverseConfiguration = nil
-        systemTaskID = nil
+        readError = nil; structuralSince = nil
+        broker.reset()
         status = "自动读取已停止。"
-        if clear { original = ""; chinese = "" }
+        if clear { original = ""; chinese = ""; live = [:]; latestID = nil }
+    }
+
+    // MARK: Streaming
+
+    private func advance(_ progress: ReplyProgress, conversation: String, manual: Bool, restart: Bool = false) {
+        let candidate = progress.candidate
+        let id = ReplyIdentity.id(conversation: conversation, ordinal: candidate.ordinal)
+        var reply = live[id]
+        let changed = reply.map { $0.text != candidate.text } ?? true
+        // A finished reply whose text changed (regenerated, edited, or extended after a
+        // premature completion signal) starts over; a stopped one waits for an explicit retry.
+        if restart || reply == nil || (changed && !reply!.stopped && (reply!.done || reply!.sourceComplete)) {
+            reply?.pipeline.cancel()
+            reply = start(id: id, ordinal: candidate.ordinal, conversation: conversation, manual: manual)
+        }
+        guard let reply else { return }
+        reply.text = candidate.text
+        if progress.complete { reply.sourceComplete = true }
+        if reply.stopped {
+            if changed { onReplyStopped(id, candidate.text, language) }
+            return
+        }
+        guard !reply.done else { return }
+        latestID = id
+        original = candidate.text
+        do { try ForeignTextPolicy.validate(candidate.text, incoming: true) } catch {
+            reply.pipeline.cancel(); reply.stopped = true
+            onReplyStopped(id, candidate.text, language)
+            status = error.localizedDescription
+            return
+        }
+        if progress.complete { reply.pipeline.finish(snapshot: candidate.text) } else { reply.pipeline.ingest(snapshot: candidate.text) }
+        if !reply.done { onReplyProgress(id, candidate.text, reply.pipeline.state.translated, language) }
+    }
+
+    private func start(id: String, ordinal: Int, conversation: String, manual: Bool) -> LiveReply {
+        let pipeline = StreamTranslationPipeline(translator: makeTranslator(), direction: .toChinese(language))
+        let reply = LiveReply(id: id, ordinal: ordinal, conversation: conversation, manual: manual, pipeline: pipeline)
+        live[id] = reply
+        fallbackNotice = nil
+        let language = self.language
+        pipeline.onUpdate = { [weak self, weak reply] state in
+            guard let self, let reply, self.live[reply.id] === reply, !reply.stopped else { return }
+            if self.latestID == reply.id { self.chinese = state.translated }
+            if state.complete {
+                reply.done = true
+                self.onReply(reply.id, reply.text, state.translated, language)
+                self.reportReplyObserved(ReplyCandidate(ordinal: reply.ordinal, text: reply.text))
+                if let failure = state.lastFailure, !state.failedSegments.isEmpty {
+                    self.status = "\(state.failedSegments.count) 段未能翻译，已在原位置保留原文：\(failure) 可点击重试。"
+                } else {
+                    self.status = self.fallbackNotice.map { "中文译文已更新。" + $0 } ?? "中文译文已更新。若 Claude 继续补充，译文会随之更新。"
+                }
+            } else {
+                self.onReplyProgress(reply.id, reply.text, state.translated, language)
+                if self.readError == nil { self.status = "正在边接收边翻译… 已完成 \(state.renderedSegments) / \(state.totalSegments) 段" }
+            }
+            self.updateTranslating()
+        }
+        return reply
+    }
+
+    private func makeTranslator() -> FailoverTranslator {
+        let translator: FailoverTranslator
+        if let translatorFactory { translator = translatorFactory() } else {
+            let useAI = engine == "ai"
+            let key = useAI ? ((try? Credentials.read()) ?? "") : ""
+            translator = FailoverTranslator(preferAI: useAI, circuit: circuit,
+                                            ai: FailoverTranslator.openAICompatible(baseURL: baseURL, model: model, key: key),
+                                            system: { [weak self] text, direction in
+                                                guard let self else { throw CancellationError() }
+                                                return try await self.systemTranslator.translate(text, direction: direction)
+                                            })
+        }
+        let previous = translator.onFallback
+        translator.onFallback = { [weak self] reason in
+            previous(reason)
+            self?.fallbackNotice = reason.message
+        }
+        return translator
+    }
+
+    private func stop(_ reply: LiveReply) {
+        guard !reply.done, !reply.stopped else { return }
+        reply.pipeline.cancel(); reply.stopped = true
+        onReplyStopped(reply.id, reply.text, language)
+    }
+
+    private func stopAll() {
+        for reply in live.values { stop(reply) }
+        updateTranslating()
+    }
+
+    private func updateTranslating() {
+        translating = live.values.contains { !$0.done && !$0.stopped }
+    }
+
+    // MARK: Structure escalation
+
+    private func noteStructural(_ detail: String) {
+        let time = now()
+        let since = structuralSince ?? time
+        structuralSince = since
+        if time.timeIntervalSince(since) >= structureTimeout {
+            if readError == nil {
+                readError = .uiStructureChanged(detail)
+                status = readError?.localizedDescription ?? detail
+                showPanel()
+            }
+        } else if readError == nil {
+            status = "正在等待 Claude 界面就绪：" + detail
+        }
+    }
+
+    private func recovered() {
+        structuralSince = nil
+        if readError != nil {
+            readError = nil
+            status = "Claude 界面已恢复，继续读取。"
+        }
+    }
+
+    private func pause(_ message: String) {
+        watching = false
+        polling?.cancel(); polling = nil
+        stopAll()
+        broker.reset()
+        status = message
     }
 }
