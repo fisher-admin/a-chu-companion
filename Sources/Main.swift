@@ -7,7 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static weak var shared: AppDelegate?
     let model = TranslatorModel()
     let usage = ClaudeUsageMonitor()
-    let webUsage = ManagedWebUsage()
+    let webUsage = NativeWebUsage()
     var window: NSWindow!
     var statusItem: NSStatusItem!
     var hotKey: EventHotKeyRef?
@@ -48,22 +48,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         model.bridge.onUsageAccount = { [weak self] observation in self?.usage.receiveAccount(observation) }
         model.bridge.onUsage = { [weak self] evidence in self?.usage.receive(evidence) }
         webUsage.onBound = { [weak self] binding in self?.usage.follow(channel:.web,binding:binding) }
+        webUsage.onReading = { [weak self] binding in self?.usage.beginVisibleRead(binding:binding) }
         webUsage.onEvidence = { [weak self] evidence in self?.usage.receive(evidence) }
         webUsage.onInvalid = { [weak self] observation in self?.usage.receiveAccount(observation) }
-        webUsage.onDisconnected = { [weak self] message in
-            guard let self, self.usage.channel == .web else { return }
-            self.usage.awaitChatEntrance(message)
+        webUsage.onBusyChanged = { [weak self] busy in
+            guard let self else { return }
+            model.replies.setCapturePaused(busy && model.webQuotaSelection != nil)
         }
-        webUsage.connectSelectedPage = { [weak self] in self?.connectSelectedWeb() }
-        webUsage.start()
+        webUsage.canRead = { [weak self] in self?.model.busy == false && self?.model.replies.isConnecting == false }
         model.onClaudeConnection = { [weak self] channel, url in
             guard let self else { return }
-            usage.follow(channel: channel, pageURL: url)
-            if channel == .web, let url {
-                webUsage.bind(url:url,browser:model.webInputBundle)
-                if !webUsage.connecting && webUsage.binding.isEmpty { usage.awaitChatEntrance(webUsage.status) }
+            if channel == .web, let selected = model.webQuotaSelection {
+                webUsage.bind(selected)
             }
-            else { webUsage.unbind() }
+            else { webUsage.unbind(); usage.follow(channel:channel,pageURL:url) }
         }
         model.onNonClaudeConnection = { [weak self] name in
             self?.webUsage.unbind()
@@ -78,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         usage.requestReport = { [weak self] channel, binding, url in
             guard let self else { throw CancellationError() }
-            if channel == .web { try webUsage.read(); return }
+            if channel == .web { try await webUsage.read(explicit:false); return }
             if !model.bridge.enabled { model.bridge.start() }
             guard model.bridge.enabled else { throw BridgeError.message(model.bridge.status) }
             try await UsageAcquisition.run("request-cli")
@@ -118,11 +116,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let activation = UUID(); panelActivation = activation
         if capture { model.prepareTarget() }
         model.refreshHealth()
-        if capture && webUsage.connecting {
+        if capture, let selected = model.webQuotaSelection, webUsage.hasSelectedTarget {
             Task { [weak self] in
                 guard let self else { return }
-                await self.webUsage.waitForBinding()
-                guard self.panelActivation == activation else { return }
+                for _ in 0..<30 where model.replies.isConnecting { try? await Task.sleep(for:.milliseconds(100)) }
+                try? await self.webUsage.read(explicit:false)
+                guard self.panelActivation == activation,
+                      [selected.app.processIdentifier,getpid()].contains(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1) else { return }
                 self.activatePanel()
             }
             return
@@ -135,18 +135,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, let view = Self.findDraft(in: self.window.contentView) else { return }
             self.window.makeFirstResponder(view)
-        }
-    }
-    private func connectSelectedWeb() {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let selected = try await model.restoreSelectedWebForQuota()
-                usage.follow(channel:.web,pageURL:selected.url)
-                webUsage.bind(url:selected.url,browser:selected.browser)
-                await webUsage.waitForBinding()
-            } catch { usage.awaitChatEntrance(error.localizedDescription) }
-            show(capture:false)
         }
     }
     static func findDraft(in view: NSView?) -> DraftTextView? {
@@ -174,7 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     func applicationWillTerminate(_ notification: Notification) {
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
-        webUsage.stop(); model.replies.stop(); model.bridge.stop(); model.stopPermissionMonitoring(); usage.stop()
+        webUsage.unbind(); model.replies.stop(); model.bridge.stop(); model.stopPermissionMonitoring(); usage.stop()
     }
 }
 

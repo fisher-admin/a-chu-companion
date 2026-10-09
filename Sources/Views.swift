@@ -7,8 +7,8 @@ struct MainView: View {
     @ObservedObject var replies: ReplyMonitor
     @ObservedObject var cliNotices: CLINoticeMonitor
     @ObservedObject var usage: ClaudeUsageMonitor
-    @ObservedObject var webUsage: ManagedWebUsage
-    init(model: TranslatorModel, usage: ClaudeUsageMonitor, webUsage: ManagedWebUsage? = nil) { self.model = model; self.replies = model.replies; self.cliNotices = model.cliNotices; self.usage = usage; self.webUsage = webUsage ?? ManagedWebUsage() }
+    @ObservedObject var webUsage: NativeWebUsage
+    init(model: TranslatorModel, usage: ClaudeUsageMonitor, webUsage: NativeWebUsage? = nil) { self.model = model; self.replies = model.replies; self.cliNotices = model.cliNotices; self.usage = usage; self.webUsage = webUsage ?? NativeWebUsage() }
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -18,7 +18,9 @@ struct MainView: View {
                     Text("中文对话助手").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 12)
-                ClaudeUsageView(usage: usage, settingsDisabled: model.busy) { model.showSettings = true }
+                ClaudeUsageView(usage: usage, settingsDisabled: model.busy || webUsage.busy, refreshWeb: {
+                    Task { try? await webUsage.read(explicit:true) }
+                }) { model.showSettings = true }
             }.padding(.horizontal, 20).padding(.vertical, 12)
                 .frame(maxWidth: .infinity)
                 .background { Rectangle().fill(.regularMaterial).ignoresSafeArea(edges: .top) }

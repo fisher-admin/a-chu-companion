@@ -4,6 +4,14 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.1.8 — 2026-10-08 — build 78 — 原生网页额度
+
+- Read the selected official Web Usage and verify the same account before/after via public accessibility controls. Restore the original page before publishing; unknown accounts, closed windows and stale bindings cannot publish. / 直接读取所选官方Usage，前后核对侧栏同一账户，恢复原页面后才发布；账户不明、窗口失效及旧绑定不显示新额度。
+- Remove the component-installation workflow and packaged browser resources; keep the withdrawn build77 commit, source, tests and incomplete acceptance as history. / 撤回组件安装流程，应用不打包浏览器脚本；保留build77历史。
+- Support English, Simplified and Traditional percentage/reset labels, reject conflicting or invalid values, and exclude paid credits and per-product shares. / 兼容三种界面标签，拒绝冲突与非法值，排除付费额度和产品分配比例。
+- Automatic reads require the selected window to remain foreground; explicit reads may activate it. Account snapshots are recently verified, not continuous background API monitoring. Preserve the user-selected sending lease and direct-send policy. / 自动额度读取限于网页前台，主动读取可激活原窗口；后台显示最近核对快照。手选发送及直接发送规则保持。
+- Validation and live limits: [acceptance record](docs/testing/native-web-usage-2026-10-08.md). / 验证与真实范围详见记录。
+
 ## 1.1.8 — 2026-10-08 — build 77 — 伴侣管理网页额度连接
 
 - Prepare and manage the quota module inside the companion; normal installation authorization replaces folder and extension-ID setup. / 由伴侣准备、管理额度模块，以正常安装授权替代手动目录和ID配置。

@@ -3,6 +3,7 @@ import SwiftUI
 struct ClaudeUsageView: View {
     @ObservedObject var usage: ClaudeUsageMonitor
     let settingsDisabled: Bool
+    var refreshWeb: (() -> Void)? = nil
     let openSettings: () -> Void
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -13,8 +14,10 @@ struct ClaudeUsageView: View {
                         .font(.system(size: 10, weight: .medium)).lineLimit(1)
                     if stale { Text("旧数据").font(.system(size: 9)).foregroundStyle(.orange) }
                     Spacer(minLength: 0)
-                    Button { usage.refresh(force: true) } label: { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.plain).disabled(usage.refreshing || usage.snapshot == nil).accessibilityLabel("刷新 Claude 额度")
+                    Button {
+                        if usage.channel == .web, let refreshWeb { refreshWeb() } else { usage.refresh(force: true) }
+                    } label: { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(.plain).disabled(usage.refreshing || usage.acquiring || settingsDisabled || (usage.snapshot == nil && usage.channel != .web)).accessibilityLabel("刷新 Claude 额度")
                     Button { usage.showConnection = true } label: { Image(systemName: "ellipsis.circle") }
                         .buttonStyle(.plain).accessibilityLabel("连接 Claude 额度")
                     Button(action: openSettings) { Image(systemName: "gearshape") }
@@ -65,7 +68,7 @@ struct ClaudeUsageView: View {
 
 struct ClaudeUsageConnectionView: View {
     @ObservedObject var usage: ClaudeUsageMonitor
-    @ObservedObject var webUsage: ManagedWebUsage
+    @ObservedObject var webUsage: NativeWebUsage
     @Environment(\.dismiss) private var dismiss
     @State private var channel: ClaudeUsageChannel = .desktop
     @State private var selectedBinding = ""
@@ -99,22 +102,16 @@ struct ClaudeUsageConnectionView: View {
                         Button("读取已打开的桌面 Usage（待验收）") { Task { await usage.captureVisibleUsage() } }
                             .disabled(CompanionPreferences.simulated)
                     } else if channel == .web {
-                        Text("伴侣准备并管理网页额度接口。首次只需确认组件安装授权，之后跟随你指定的 Claude 网页账户；切换账户先隐藏旧额度。")
+                        Text("直接读取 Claude 网页的设置 → Usage，无需安装浏览器组件。读前、读后核对同一账户，并恢复原页面。")
                         HStack {
-                            Button(webUsage.authorized ? "授权当前网页" : "连接网页额度") { webUsage.prepareAuthorization() }
-                                .buttonStyle(.borderedProminent).disabled(!webUsage.available || CompanionPreferences.simulated)
-                            Button("连接已指定网页") { dismiss(); webUsage.connectSelectedPage() }
-                                .disabled(!webUsage.hasSelectedTarget || webUsage.connecting || CompanionPreferences.simulated)
+                            Button("读取连接窗口额度") { error = ""; Task { do { try await webUsage.read(explicit:true) } catch { self.error = error.localizedDescription } } }
+                                .buttonStyle(.borderedProminent).disabled(!webUsage.hasSelectedTarget || webUsage.busy || CompanionPreferences.simulated)
+                            Button("读取已打开 Usage") { error = ""; Task { do { try await webUsage.readOpenUsage() } catch { self.error = error.localizedDescription } } }
+                                .disabled(webUsage.busy || CompanionPreferences.simulated)
                         }
-                        HStack {
-                            Button("刷新网页额度") { error = ""; usage.acquire(.web) }
-                                .disabled(usage.acquiring || webUsage.binding.isEmpty || CompanionPreferences.simulated)
-                            Button("打开官方 Usage") { UsageAcquisition.openWebUsage() }
-                        }
+                        Button("打开官方 Usage") { UsageAcquisition.openWebUsage() }
                         Text(webUsage.status).font(.system(size:11)).foregroundStyle(.secondary)
-                        Text("本机已有网页组件时会打开正常安装授权。无需选择扩展文件夹或填写 ID；未获准运行的组件不会显示为已连接。网页额度不可用时，发送、读取和翻译仍可继续。")
-                        Button("撤销网页额度授权", role:.destructive) { webUsage.revoke() }
-                            .disabled(!webUsage.authorized || CompanionPreferences.simulated)
+                        Text("首次可读取唯一窗口当前标签中显示的 Usage；不扫描隐藏标签。有多个窗口时，在所需输入区按 ⌃⌥E 指定。回复后仅在该网页仍处于前台时自动刷新；后台保留最近核对的快照，主动读取才会切回所选窗口。")
                     } else {
                         Text("依据 Claude Code 官方会话和状态栏读取，与终端品牌无关。新会话核对当前登录；换账户后，旧会话额度失效，需启动新会话。")
                         Text("只读取订阅额度，不计 API 费用。未安装会话身份入口的旧会话，可以读取正文，但额度身份待核对。")

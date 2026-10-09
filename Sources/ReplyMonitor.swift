@@ -42,6 +42,15 @@ import Translation
     private(set) var readRetrySeconds: Double = 1
     private var transientReadDisplay: (before: String, display: String)?
     private var captureGeneration = UUID()
+    private var capturePaused = false
+    private(set) var isConnecting = false
+    /// Quota temporarily overlays this same page. Keep the translation pipeline
+    /// and subscription, but discard captures from either side of the overlay.
+    func setCapturePaused(_ paused: Bool) {
+        guard capturePaused != paused else { return }
+        capturePaused = paused; captureGeneration = UUID()
+        if paused { historyRequestID = nil }
+    }
     private var pipeline: ReplyPipeline?
     private var retiredRecords: Set<String> = []
     private var activeSession: TranslationSession?
@@ -86,6 +95,8 @@ import Translation
     func connect(target: TargetBridge.Target, engine: String, baseURL: String, model: String, language: TranslationLanguage = .english) async {
         stop(clear: true)
         let token = UUID(); sessionID = token
+        isConnecting = true
+        defer { if sessionID == token { isConnecting = false } }
         self.engine = engine; self.baseURL = baseURL; self.model = model; self.language = language
         sourceName = target.name; watching = true; status = "正在连接 Claude，连接后持续读取并翻译正式回复…"
         do {
@@ -107,6 +118,7 @@ import Translation
     }
     func resetTranslation() { pipeline?.cancel(); pipeline = nil; cancelSystem(); translating = false }
     func ingest(_ snapshot: ReplySnapshot, now: TimeInterval = Date().timeIntervalSinceReferenceDate) {
+        guard !capturePaused else { return }
         let addresses = snapshot.messages.map(\.address)
         guard addresses == addresses.sorted(), Set(addresses).count == addresses.count else {
             handleReadFailure(ReplyReadPending(message: "消息顺序尚未完整，等待重新同步。")); return
@@ -134,17 +146,22 @@ import Translation
         polling = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, sessionID == token, watching else { return }
+                if capturePaused { try? await Task.sleep(for:.milliseconds(100)); continue }
+                let captureToken = captureGeneration
                 do {
-                    let captureToken = captureGeneration
                     let snapshot = try await source.capture()
                     guard sessionID == token, watching else { return }
                     if captureGeneration == captureToken { ingest(snapshot) }
-                } catch { guard sessionID == token else { return }; handleReadFailure(error) }
+                } catch {
+                    guard sessionID == token else { return }
+                    if captureGeneration == captureToken { handleReadFailure(error) }
+                }
                 try? await Task.sleep(for: .seconds(readRetrySeconds))
             }
         }
     }
     func readVisible(target: TargetBridge.Target, engine: String, baseURL: String, model: String, language: TranslationLanguage) async {
+        guard !capturePaused else { status = "正在读取网页额度，恢复会话后可读取历史回复。"; return }
         configure(engine: engine, baseURL: baseURL, model: model, language: language)
         let request = UUID(); historyRequestID = request; status = "正在读取 Claude 当前可见的正式回复…"
         do {
@@ -216,7 +233,7 @@ import Translation
         activeSession = nil; reverseConfiguration = nil; systemTaskID = nil
     }
     func handleReadFailure(_ error: Error) {
-        guard watching else { return }
+        guard watching, !capturePaused else { return }
         if error is CancellationError { return }
         if let stopped = error as? ReplyReadStopped { pause(stopped.localizedDescription); return }
         let before = transientReadDisplay.flatMap { status == $0.display ? $0.before : nil } ?? status
@@ -248,6 +265,7 @@ import Translation
         status = watching ? "本地记录已清除，继续读取 Claude 的新回复。" : "本地记录已清除。"
     }
     func stop(clear: Bool = false) {
+        isConnecting = false
         transientReadDisplay = nil
         sessionID = UUID(); watching = false; polling?.cancel(); polling = nil
         errors = 0; readRetrySeconds = 1

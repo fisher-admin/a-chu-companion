@@ -4,7 +4,7 @@
 
 **聊天读取**：辅助功能用于绑定窗口的 Claude 可访问消息区及输入框，不扫描其他应用的对话。切换同窗会话会跟随读取；窗口关闭、权限撤销或离开 Claude 页面会提示或停止。仅在本次运行中保留最近十条完整回复译文和有界的待处理内容，不将聊天落盘；退出清空。清除本地记录不删除 Claude 的服务器记录。
 
-**消息回填**：临时使用剪贴板，属于本次操作时恢复原内容；核对输入框及回填结果后才尝试配置的发送键。自动发送由用户选择，按键成功不等于服务器已收到。
+**消息回填**：临时使用剪贴板，属于本次操作时恢复原内容；按用户手选的物理输入位置及发送设置投递；不审核译文质量，不检查草稿或粘贴回执。自动发送由用户选择，按键成功不等于服务器已收到。
 
 **系统翻译**：默认调用 Apple Translation，不需要翻译 API 密钥。首次语言包下载可能联网，已安装包复用；具体处理遵循 macOS 系统翻译规则。
 
@@ -14,7 +14,7 @@
 
 **Claude 额度**：可以读取当前桌面登录或保存指定 session。指定凭据在本程序钥匙串；桌面 Cookie 数据库留在 Claude 原目录，读取不修改它。首次桌面连接可能请求读取 Claude Safe Storage；后台自动查询禁止重复弹出授权。查询只向 claude.ai 发只读组织／额度请求，携带相应会话凭据，不发送聊天正文、不调用模型、不统计 API 计费。网页／桌面不同账户需用户连接对应来源。
 
-**伴侣管理网页额度（build77）**：网页模块仅在claude.ai使用页面已有登录同源获取当前账户与额度，不使用Cookie API，不转发Cookie、完整邮箱、聊天正文或登录令牌。只向127.0.0.1认证接口发送遮蔽账户、身份指纹、百分比和重置时间。首次安装由用户授权；本机传输密钥保存在脚本管理器隔离存储和伴侣用户私有目录，非Claude登录凭据。它们不随仓库发布。账户变化、退出或失联先隐藏旧值；撤销授权关闭此接入，不影响聊天收发。当前需要已有获准运行的网页组件；独立WebView登录不能冒充外部浏览器当前账户。
+**原生网页额度（build78）**：仅通过已有辅助功能权限读取所选物理窗口的Claude官方Usage页面与侧栏账户菜单。额度前后核对同一唯一账户；完整邮箱只短暂参与本机哈希，不保存或传输，界面与偏好仅保留遮蔽邮箱和身份指纹。不读取浏览器Cookie、登录令牌、账户安全页或钥匙串，不注入脚本，不启动网页服务，不安装或打包浏览器组件。读完恢复原页面，账户不明或恢复失败不发布额度。后台自动请求不会激活浏览器；显式读取会激活此前所选窗口。账户在其他窗口变化不会立即被检测，快照是最近核对结果。build77方案保留为历史，当前应用不启动它。
 
 **偏好与签名**：语言、字号、发送方式和服务地址等偏好保存在本机。安装脚本在用户钥匙串创建／复用不可导出的本机签名私钥，签名配置留在应用支持目录。它们不随仓库发布，不改变系统证书信任，不是 Apple 公证。
 
@@ -36,7 +36,7 @@ Language, text size, send options, and provider settings are local preferences. 
 
 Public issues, PRs, CI logs, and release material are visible to others. Share only synthetic/sanitized evidence. CI uses mock services and fictional credentials; it does not access personal logins. Checks do not print matched secret contents, and no scanner guarantees detection of all sensitive information.
 
-## 1.1.7 experimental bridge / 实验桥接
+## 1.1.7 experimental bridge / 实验桥接（历史）
 
 The read-only bridge uses a private local socket and rotating token. It never exposes API keys to a browser or hook. Only explicitly enabled Claude tabs or configured CLI events are received; session storage holds selected tab IDs, not chat text. Usage adapters relay only subscription windows, used percentages and reset descriptions. Account binding is user-confirmed; switching to a visible source disables hidden credential fallback. No adapter is installed by normal startup. / 只读桥接使用私人本机端口与轮换令牌，不向浏览器或 hook 提供 API key；只接收用户启用的标签或配置的 CLI 事件。会话存储仅含标签编号，不保存正文。用量仅传订阅窗口、比例和重置说明；账号由用户确认，可见来源迁移后关闭隐藏凭据回退。正常启动不安装适配器。
 
@@ -54,10 +54,12 @@ Ordinary table geometry and numeric cells remain local. Gemini receives only tra
 
 网页只在当前可见账户菜单能提供唯一身份、同次读取前后身份一致时接收可信额度。昵称、套餐名称和手工 session 不能证明浏览器当前账户。身份无法确认时隐藏额度，等待核对；这不是自动浏览器额度连接已经真实验收的声明。
 
-## 连接聊天自动取得额度（build56）
+## 连接聊天自动取得额度（build56，历史）
 
 上述 build54 DOM 账户采集被网页同源只读请求替代。用户启用的官方 claude.ai 标签使用浏览器已有会话请求账户与唯一组织额度，并在请求前后核对身份。没有 Cookie 读取权限，不提取、保存或传递 Cookie/OAuth；原始账户响应、邮箱和组织标识只在页面采集器短暂处理，本机只收遮蔽名称、指纹和限额。多组织不猜测。停止、导航或身份变化使未完成请求失效。请求与聊天正文读取独立，私有接口结构变化会明确失败。
 
 聊天连接自动使用经过核对的同一来源报告；手动 session 仍是独立来源，不自动跟随浏览器。CLI 设置动作仅包装用户原状态栏并加入本工具会话入口，可撤回；不会读取 OAuth，不因获取报告而向模型发送消息。状态栏定时/主动重跑只能称“当前报告”，不能证明服务器刷新。正常启动不自动安装扩展或修改个人 CLI 配置。
 
-Managed Web usage (build77) uses the actual page login through same-origin requests, without Cookie APIs, chat text, full email or login tokens in the relay. Only masked identity and quota reach the authenticated loopback interface. Transport grants live in isolated userscript storage and the companion private directory; these are not Claude credentials and are not distributed. Revocation and invalid identity clear Web quota independently of chat. A permitted runtime is currently required; an independent WebView login is not treated as the external browser account.
+## Native Web usage / 原生网页额度（build78）
+
+Native Web usage (build78) reads only the selected physical window's official Claude Usage and scoped sidebar account menu through existing accessibility permission. Identity must match before and after the read. Full email is transient input to local hashing; only a masked label and fingerprint are retained. No browser cookies, login tokens, account-security pages, browser Keychain items, script injection, browser components or local Web service are used. Failed identity/restoration withdraws quota. Automatic reads never activate a background browser; explicit reads may activate the selected window. Account changes elsewhere are not detected instantly: values are last-verified snapshots. The withdrawn build77 workflow remains historical and is not started by the production app.

@@ -3,6 +3,7 @@ import SwiftUI
 
 enum ClaudePlan: String, Sendable {
     case pro = "Pro", max = "Max", team = "Team", enterprise = "Enterprise", free = "Free", unknown = "套餐未识别"
+    static let allReportedPlans: [Self] = [.pro,.max,.team,.enterprise,.free]
     static func decode(_ data: Data) throws -> Self {
         struct Organization: Decodable { let capabilities: [String] }
         guard let value = try? JSONDecoder().decode(Organization.self, from: data) else { throw ClaudeUsageError.malformed }
@@ -126,6 +127,7 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
     private var acquisitionURL: String?
     private var acquisitionBaseline: [String: Int] = [:]
     var requestReport: (ClaudeUsageChannel, String?, String?) async throws -> Void = { _, _, _ in throw ClaudeUsageError.unavailable }
+    var removeSession: @Sendable () -> Bool = { ClaudeSessionStore.remove() }
     @Published private(set) var acquisitionStatus = ""
     @Published private(set) var acquiring = false
 
@@ -164,7 +166,8 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         }
     }
     /// Periodic refresh while a Desktop/session entrance is connected. Web is
-    /// refreshed by its extension and CLI by its own status-line cycle.
+    /// Web uses foreground-only native reads after replies; CLI reports through
+    /// its own status-line cycle. Neither silently activates another app.
     func startPeriodicRefresh(every interval: Duration = .seconds(60)) {
         periodic?.cancel()
         periodic = Task { [weak self] in
@@ -192,7 +195,7 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
                 try await requestReport(channel, binding, pageURL)
                 try await Task.sleep(for: .seconds(12))
                 guard !Task.isCancelled, let self, self.generation == token else { return }
-                acquisitionStatus = channel == .cli ? "未收到新额度报告。请启动新 Claude Code 会话；首次正式回复前可能没有额度字段。" : "未收到网页额度。请确认网页入口已安装并启用，当前账户可核对，且只有一个组织。"
+                acquisitionStatus = channel == .cli ? "未收到新额度报告。请启动新 Claude Code 会话；首次正式回复前可能没有额度字段。" : "未读到网页额度，请在伴侣主动读取；需有可核对账户的 Claude 官方网页。"
                 if channel == .web, self.channel == .web { status = acquisitionStatus }
             } catch is CancellationError { return }
             catch {
@@ -244,8 +247,10 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         configure(.session); refresh()
     }
     func disconnectAsync() async {
+        guard source == .session else { disconnect(); return }
         stop(); let token = generation; settings.set(false, forKey: "usageConnected")
-        let removed = try? await Credentials.offMainRead(busyRetryLimit: 0) { ClaudeSessionStore.remove() ? "removed" : "retained" }
+        let erase = removeSession
+        let removed = try? await Credentials.offMainRead(busyRetryLimit: 0) { erase() ? "removed" : "retained" }
         guard generation == token else { return }
         disconnect()
         if removed != "removed" { status = "已断开额度连接；钥匙串暂不可访问，已保存 session 保留。" }
@@ -311,6 +316,12 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
     private func clearVisibleAccount(_ text: String) {
         snapshot = nil; plan = .unknown; stale = false; evidenceSignature = ""; accountDisplayName = "账户待核对"; status = text
     }
+    /// Hide a previous snapshot without acknowledging (and cancelling) the
+    /// request whose identity sandwich is still running.
+    func beginVisibleRead(binding: String) {
+        guard !awaitingEntrance, source == .visiblePage, evidenceBinding == binding else { return }
+        clearVisibleAccount("正在重新核对当前网页账户和额度")
+    }
     func receiveAccount(_ observation: UsageAccountObservation) {
         guard acceptAccount(observation) else { return }
         receivedReport(channelFor(observation.source), observation: observation, quota: false)
@@ -335,12 +346,13 @@ enum ClaudeUsageChannel: String, CaseIterable, Identifiable {
         candidates.insert(evidence, at: 0); if candidates.count > 8 { candidates.removeLast(candidates.count - 8) }
         guard !awaitingEntrance, evidence.binding == evidenceBinding, source == sourceFor(evidence.source) else { return }
         accountDisplayName = evidence.identity!.displayName
+        plan = evidence.snapshot.reportedPlan ?? .unknown
         if following, let connection = visibleConnection, let saved = try? JSONEncoder().encode(connection) { settings.set(saved, forKey: "visibleUsageConnection") }
         if evidence.contentSignature != evidenceSignature || snapshot == nil || evidence.source == .usagePage {
             evidenceSignature = evidence.contentSignature; snapshot = evidence.snapshot
         }
         stale = snapshot?.isStale(at: Date()) == true
-        status = (stale ? "相同报告，额度证据未更新 · " : "已更新 · ") + source.name
+        status = (stale ? "相同报告，额度证据未更新 · " : (evidence.source == .usagePage ? "最近核对 · " : "已更新 · ")) + source.name
     }
     func migrateVisible(account: String, evidence selected: UsageEvidence? = nil) throws {
         let label = account.trimmingCharacters(in: .whitespacesAndNewlines)

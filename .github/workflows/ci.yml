@@ -65,5 +65,8 @@ jobs:
           app="dist/unsigned/A畜伴侣.app"
           plutil -lint "$app/Contents/Info.plist"
           test -s "$app/Contents/Resources/AChuCompanion.icns"
+          test -s "$app/Contents/Resources/Bridge/bridge.py"
+          test ! -e "$app/Contents/Resources/Bridge/web"
+          test ! -e "$app/Contents/Resources/Bridge/chrome"
           file "$app/Contents/MacOS/AChuCompanion"
           test ! -e "dist/A畜伴侣.app"

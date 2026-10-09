@@ -58,22 +58,24 @@ enum VisibleUsageParser {
     static func parse(_ lines: [String], binding: String, source: UsageEvidenceSource, at: Date = Date()) throws -> UsageEvidence {
         guard lines.count <= 2_000, lines.joined().count <= 100_000 else { throw ClaudeUsageError.malformed }
         var window: String?; var pendingReset: String?; var values: [String: ClaudeUsageWindow] = [:]
-        let regex = try NSRegularExpression(pattern: #"([0-9]+(?:\.[0-9]+)?)\s*%\s*(?:used|已用|已使用|已使用量)"#, options: [.caseInsensitive])
+        let regex = try NSRegularExpression(pattern: #"(?<![+\d.])(-?[0-9]+(?:\.[0-9]+)?)\s*%\s*(?:used\b|已使用量|已使用|已用)|(?:used\b|已使用量|已使用|已用)\s*(-?[0-9]+(?:\.[0-9]+)?)\s*%"#, options: [.caseInsensitive])
         for raw in lines {
-            let line = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = raw.applyingTransform(StringTransform("Hant-Hans"), reverse:false) ?? raw
+            let line = normalized.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             var nextWindow = window
-            if ["limit resets", "usage credits", "extra usage", "额度重置"].contains(line) || line.contains("usage by product") { nextWindow = nil }
-            else if ["current session", "当前会话", "本次会话", "5小时", "5 小时"].contains(where: { line.contains($0) }) { nextWindow = "five" }
+            if ["limit resets", "usage credits", "extra usage", "额度重置", "使用量额度"].contains(line) || line.contains("usage by product") || line.contains("各产品使用量") { nextWindow = nil }
+            else if ["current session", "当前会话", "本次会话", "目前工作阶段", "5小时", "5 小时"].contains(where: { line.contains($0) }) { nextWindow = "five" }
             else if ["this week", "本周"].contains(line) || ["weekly limits", "all models", "每周", "所有模型"].contains(where: { line.contains($0) }) { nextWindow = "seven" }
             else if line.contains("sonnet") || line.contains("opus") { nextWindow = nil }
             if nextWindow != window { window = nextWindow; pendingReset = nil }
-            if let window, line.hasPrefix("resets") || line.contains("重置") {
+            if let window, line.hasPrefix("resets") || line.contains("重置") || line.contains("重设") || line.contains("first message") || line.contains("第一则讯息") {
                 pendingReset = String(raw.prefix(160))
                 if let current = values[window] { values[window] = .init(usedPercentage: current.usedPercentage, resetsAt: current.resetsAt, resetDescription: pendingReset) }
                 continue
             }
-            guard let window, let match = regex.firstMatch(in: raw, range: NSRange(location: 0, length: (raw as NSString).length)),
-                  let percent = Double((raw as NSString).substring(with: match.range(at: 1))), (0...100).contains(percent) else { continue }
+            guard let window, let match = regex.firstMatch(in: normalized, range: NSRange(location: 0, length: (normalized as NSString).length)) else { continue }
+            let range = match.range(at:match.range(at:1).location == NSNotFound ? 2 : 1)
+            guard let percent = Double((normalized as NSString).substring(with:range)), (0...100).contains(percent) else { throw ClaudeUsageError.malformed }
             guard values[window] == nil else { throw ClaudeUsageError.malformed }
             values[window] = .init(usedPercentage: percent, resetsAt: nil, resetDescription: pendingReset)
         }
