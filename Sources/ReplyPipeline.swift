@@ -22,28 +22,38 @@ import Foundation
     var onTranslation: (String, String, String, Bool) -> Void = { _, _, _, _ in }
     var onCompletion: (String, Bool) -> Void = { _, _ in }
     var onStatus: (String, Bool) -> Void = { _, _ in }
+    /// Called when the last running slice finishes and nothing else is ready.
+    var onIdle: () -> Void = {}
     /// Local translation used when the primary service fails for one slice.
     var fallback: (@MainActor (String) async throws -> String)?
     private let incremental: Bool
     private let translate: @MainActor (String) async throws -> String
     private var records: [String: Record] = [:]
     private var order: [String] = []
-    private var retired: Set<String> = []
+    private var retired = RetiredIDs()
     private var conversation = ""
     private var suspended = false
     private var cooldownUntil = -Double.infinity
     private var minimumOrdinal = 1
     private var now: TimeInterval = 0
     private var epoch = UUID()
-    private var task: Task<Void, Never>?
-    private var active: (id: String, index: Int, revision: UUID)?
+    private struct SliceKey: Hashable { let id: String; let index: Int }
+    private struct Running { let token: UUID; let revision: UUID; let task: Task<Void, Never> }
+    /// Slices translate concurrently up to this bound; publish() still renders only the
+    /// contiguous translated prefix, so output order always follows the source.
+    private let concurrency: Int
+    private var running: [SliceKey: Running] = [:]
     private(set) var completedTurns = 0
-    private(set) var busy = false
+    var busy: Bool { !running.isEmpty }
+    /// Live records, including finished ones still shown in history; for memory checks.
+    var recordCount: Int { records.count }
     var hasFailures: Bool { suspended || records.values.contains { $0.slices.contains { $0.failed || $0.retryAt != nil } } }
     var pendingCharacters: Int { records.values.reduce(0) { $0 + $1.slices.filter { $0.chinese == nil }.reduce(0) { $0 + $1.part.text.count } } }
     var queuedCharacters: Int { ready().reduce(0) { $0 + (records[$1.0]?.slices[$1.1].part.text.count ?? 0) } }
     var queuedCount: Int { ready().count }
-    init(incremental: Bool = true, translate: @escaping @MainActor (String) async throws -> String) { self.incremental = incremental; self.translate = translate }
+    init(incremental: Bool = true, concurrency: Int = 1, translate: @escaping @MainActor (String) async throws -> String) {
+        self.incremental = incremental; self.concurrency = max(1, concurrency); self.translate = translate
+    }
     func observe(conversation value: String, messages: [ChatMessage], responseComplete: Bool, now: TimeInterval) {
         self.now = now
         if value != conversation {
@@ -60,6 +70,7 @@ import Foundation
             }
         }
         order.removeAll { records[$0] == nil }
+        for (key, entry) in running where records[key.id] == nil { entry.task.cancel(); running[key] = nil }
         let newest = messages.last?.ordinal ?? 0
         for message in messages where message.author == .assistant && message.ordinal >= minimumOrdinal {
             let id = ReplyIdentity.id(conversation: value, ordinal: message.ordinal, segment: message.segment)
@@ -116,8 +127,9 @@ import Foundation
         }
         records[id] = .init(original: text, slices: slices, complete: complete, manual: manual)
         if old == nil { order.append(id) }
-        if let active, active.id == id,
-           active.index >= slices.count || slices[active.index].revision != active.revision { cancel() }
+        for (key, entry) in running where key.id == id && (key.index >= slices.count || slices[key.index].revision != entry.revision) {
+            entry.task.cancel(); running[key] = nil
+        }
         if old?.original != text, old != nil { publish(id) }
         onCompletion(id, complete && slices.allSatisfy { $0.chinese != nil })
     }
@@ -130,8 +142,11 @@ import Foundation
             for (index, slice) in record.slices.enumerated() where slice.chinese == nil && !slice.failed {
                 guard slice.retryAt.map({ now >= $0 }) ?? true else { continue }
                 if slice.part.translatable, now < cooldownUntil, fallback == nil { continue }
-                guard record.complete || (incremental && now - slice.changedAt >= 3) else { continue }
-                if let active, active.id == id && active.index == index { continue }
+                // A slice followed by more text after its line break is a finished paragraph,
+                // table or block: translate it now. The growing tail still waits until stable.
+                let closed = index < record.slices.count - 1 && slice.part.text.last?.isNewline == true
+                guard record.complete || (incremental && (closed || now - slice.changedAt >= 3)) else { continue }
+                if running[SliceKey(id: id, index: index)] != nil { continue }
                 // A protected block may be larger; it needs no cloud request.
                 let size = slice.part.text.count
                 guard result.count < 64, characters + size <= 150_000 else { return result }
@@ -142,15 +157,16 @@ import Foundation
         return result
     }
     private func pump() {
-        guard task == nil, let (id, index) = ready().first, let record = records[id] else {
-            if task == nil { busy = false }
-            return
+        while running.count < concurrency, let (id, index) = ready().first, let record = records[id] {
+            start(id: id, index: index, slice: record.slices[index])
         }
-        let slice = record.slices[index]; let token = epoch
-        active = (id, index, slice.revision); busy = true
+    }
+    private func start(id: String, index: Int, slice: Slice) {
+        let token = epoch, mine = UUID(), key = SliceKey(id: id, index: index)
         onStatus("正在翻译稳定片段…", true)
-        task = Task { [weak self] in
+        let task = Task { [weak self] in
             guard let self else { return }
+            defer { self.release(key, mine) }
             var primaryFailure: Error?
             do {
                 var fallbackReason: Error?
@@ -165,8 +181,7 @@ import Foundation
                     catch let error where !(error is CancellationError) && !Task.isCancelled {
                         guard self.epoch == token else { throw CancellationError() }
                         primaryFailure = error
-                        if let wait = error as? ServiceCooldown { self.cooldownUntil = max(self.cooldownUntil, self.now + wait.seconds) }
-                        if let wait = error as? ServiceTransientError { self.cooldownUntil = max(self.cooldownUntil, self.now + wait.seconds) }
+                        if let wait = error as? ServiceRetryDelay { self.cooldownUntil = max(self.cooldownUntil, self.now + wait.seconds) }
                         guard self.fallback != nil else { throw error }
                         let value = try await TextTranslation.run(slice.part.text, translate: self.fallback!)
                         fallbackReason = error
@@ -174,33 +189,39 @@ import Foundation
                     }
                 } : slice.part.text
                 let value = slice.part.tableCell && slice.part.translatable ? MarkdownTable.escapeCell(translated) : translated
-                guard epoch == token, !Task.isCancelled, let current = records[id], index < current.slices.count, current.slices[index].revision == slice.revision else { return }
+                guard epoch == token, running[key]?.token == mine, !Task.isCancelled, let current = records[id], index < current.slices.count, current.slices[index].revision == slice.revision else { return }
                 records[id]?.slices[index].chinese = value
                 records[id]?.slices[index].retryAt = nil
                 records[id]?.slices[index].attempts = 0
                 publish(id)
                 if let fallbackReason {
-                    onStatus("翻译服务未能提供可用译文（" + fallbackReason.localizedDescription + "），本段已改用系统翻译。", false)
+                    onStatus("翻译服务未能提供可用译文（" + fallbackReason.localizedDescription + "），本段已改用系统翻译。", running.count > 1)
                 } else {
-                    onStatus(hasFailures ? "部分片段翻译失败，原文和已有中文已保留；可重试未完成片段。" : "阶段性中文已更新，继续读取后续回复。", false)
+                    onStatus(hasFailures ? "部分片段翻译失败，原文和已有中文已保留；可重试未完成片段。" : "阶段性中文已更新，继续读取后续回复。", running.count > 1)
                 }
             } catch {
-                guard epoch == token, let current = records[id], index < current.slices.count, current.slices[index].revision == slice.revision else { return }
+                guard epoch == token, running[key]?.token == mine, let current = records[id], index < current.slices.count, current.slices[index].revision == slice.revision else { return }
                 let failure = primaryFailure ?? error
-                let wait = (failure as? ServiceCooldown)?.seconds ?? (failure as? ServiceTransientError)?.seconds
+                let wait = (failure as? ServiceRetryDelay)?.seconds
                 records[id]?.slices[index].attempts += 1
                 if let wait, !(error is CancellationError), slice.attempts < 2 {
                     cooldownUntil = max(cooldownUntil, now + wait)
                     records[id]?.slices[index].retryAt = cooldownUntil
                 } else { records[id]?.slices[index].failed = true; records[id]?.slices[index].retryAt = nil }
                 let primary = primaryFailure.map { $0.localizedDescription + "；" } ?? ""
-                onStatus(error is CancellationError ? "翻译已取消，可重试。" : "翻译失败：" + primary + error.localizedDescription + (records[id]?.slices[index].retryAt != nil ? "；保留原文和已有中文，等待后自动重试。" : "；已有中文保留，可重试。"), false)
+                onStatus(error is CancellationError ? "翻译已取消，可重试。" : "翻译失败：" + primary + error.localizedDescription + (records[id]?.slices[index].retryAt != nil ? "；保留原文和已有中文，等待后自动重试。" : "；已有中文保留，可重试。"), running.count > 1)
             }
-            guard epoch == token else { return }
-            task = nil; active = nil; busy = false
-            order.removeAll { $0 == id }; if records[id] != nil { order.append(id) }
-            pump()
         }
+        running[key] = Running(token: mine, revision: slice.revision, task: task)
+    }
+    /// Every exit path frees its slot exactly once; a cancelled or superseded slice
+    /// no longer owns the key, so its late exit changes nothing.
+    private func release(_ key: SliceKey, _ mine: UUID) {
+        guard running[key]?.token == mine else { return }
+        running[key] = nil
+        order.removeAll { $0 == key.id }; if records[key.id] != nil { order.append(key.id) }
+        pump()
+        if running.isEmpty { onIdle() }
     }
     private func publish(_ id: String) {
         guard let record = records[id] else { return }
@@ -217,9 +238,10 @@ import Foundation
         retired.formUnion(ids)
         for id in ids { records[id] = nil }
         order.removeAll { ids.contains($0) }
-        if let active, ids.contains(active.id) { cancel(); pump() }
+        for (key, entry) in running where ids.contains(key.id) { entry.task.cancel(); running[key] = nil }
+        pump()
     }
-    func cancel() { epoch = UUID(); task?.cancel(); task = nil; active = nil; busy = false }
+    func cancel() { epoch = UUID(); running.values.forEach { $0.task.cancel() }; running = [:] }
     func suspend() { suspended = true; cancel() }
     func clear() { retired.formUnion(records.keys); cancel(); records = [:]; order = [] }
 }

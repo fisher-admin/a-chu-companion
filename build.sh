@@ -30,8 +30,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleDisplayName</key><string>A畜伴侣</string>
 <key>CFBundleExecutable</key><string>AChuCompanion</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.1.8</string>
-    <key>CFBundleVersion</key><string>78</string>
+<key>CFBundleShortVersionString</key><string>1.2.1</string>
+    <key>CFBundleVersion</key><string>80</string>
 <key>CFBundleIconFile</key><string>AChuCompanion</string>
 <key>LSMinimumSystemVersion</key><string>15.0</string>
 <key>LSUIElement</key><true/>

@@ -4,6 +4,23 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.2.1 — 2026-10-08 — build 80 — 基于 build78 整合流式与降级改进
+
+Based on build78 (`e22f695`). Keeps CLI support, native Web usage, native Gemini configuration with per-service keys, table rendering, localized and Web Code reading, and per-segment records. Ports only the reviewed 1.2.0 improvements. / 以 build78 为基础，保留 CLI、原生网页额度、独立 Gemini 与按服务隔离的密钥、表格显示、中文界面与网页 Code 读取及分段记录，只迁入经审核保留的 1.2.0 改进。
+
+- A finished paragraph followed by a new one translates immediately; the growing tail keeps the ~3 s stability rule, and completed replies flush at once. / 后面已有新段落的完成段落立即翻译，末尾保持约三秒稳定规则，完成的回复立即全部翻译。
+- Cloud slices translate up to three at a time with in-order publishing, per-slice ownership tokens and guaranteed slot release; system translation is serialized. / 云端最多三段并行、按序显示，片段归属可核对且必定释放；系统翻译逐段执行。
+- 401/403 pause the service through the shared gate like 429/5xx; later slices fall back without repeated failed requests. / 401/403 与限流一样经共用通道暂停服务，后续片段直接降级。
+- Remote output cleanup removes added preambles, wrapping fences and quotes; no language, length or semantic checks. An unpaired fence falls back for that slice. / 云端译文只清理多余说明、外包代码块与引号，不做语言、长度或语义检查；代码块标记不成对时本段降级。
+- Structural read failures lasting ~45 s raise a visible warning without stopping reading; thinking and tool runs never trigger it. / 结构性读取失败约 45 秒后提示，不停止读取；思考和工具运行不触发。
+- Insertion clipboard items carry TransientType/ConcealedType (Desktop, Web and CLI share this paste). Accessibility opt-ins the companion enabled are switched off on target change and quit. / 回填剪贴板带临时与隐藏标记（三端共用）；连接更换或退出时关闭本程序开启的辅助功能选项。
+- Retired reply identities are bounded. / 已移出记录的回复标识数量有上限。
+- Fix `test-http.sh` and `test-languages.sh`, which still referenced the removed `TranslationFidelity.swift` and failed on build78. / 修复仍引用已删除文件、在 build78 中失败的两项测试脚本。
+
+Not ported, by design: the 1.2.0 translation quality gate (language/length ratios), composer read-back send confirmation, the replacement reply tracker, segmenter and single-bubble rendering, and the generic “Gemini address” button. build78's delivery reports dispatched keys without claiming receipt. / 按设计未迁入：1.2.0 的语言与长度质量门槛、读取输入框确认发送、替换式回复追踪、分段器与单气泡显示、通用 Gemini 地址按钮。build78 的发送只报告按键已发出，不宣称已送达。
+
+Validation: see TEST_PLAN. / 验证见 TEST_PLAN。
+
 ## 1.1.8 — 2026-10-08 — build 78 — 原生网页额度
 
 - Read the selected official Web Usage and verify the same account before/after via public accessibility controls. Restore the original page before publishing; unknown accounts, closed windows and stale bindings cannot publish. / 直接读取所选官方Usage，前后核对侧栏同一账户，恢复原页面后才发布；账户不明、窗口失效及旧绑定不显示新额度。

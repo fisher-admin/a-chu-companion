@@ -15,6 +15,15 @@ This is an independent community project, not an Anthropic or official Claude pr
 
 ## Current development changes
 
+**1.2.1 build80** is based on build78 and ports the reviewed improvements from 1.2.0, without changing Desktop/Web/CLI sending, usage sources, Gemini settings, table display or per-segment records:
+
+- **Faster segment translation:** a finished paragraph followed by a new one translates immediately; the tail still waits about three seconds of stability. Cloud translation runs up to three slices at once and still renders strictly in source order; system translation stays one slice at a time.
+- **Service pause:** a rejected key or project (401/403) pauses that service like a rate limit, so later slices go straight to system translation instead of repeating failed requests. A new key is tried again.
+- **Chatter cleanup only:** remove an added "Here is the translation:" style preamble, a code fence wrapped around the whole answer, and added outer quotes. Language, length and meaning are not checked; only an unpaired fence makes that slice use system translation.
+- **Interface-change warning:** if Claude's page, transcript or message markers stay unrecognised for about 45 seconds, a clear warning appears; reading continues and clears it on recovery. Thinking and tool runs never trigger it.
+- **Clipboard and accessibility:** translations placed on the clipboard for insertion carry transient and concealed markers, so clipboard managers do not record them. When the connection moves to another app or the companion quits, the Chrome/Electron accessibility options it enabled for reading are switched back off; settings the app already had are untouched.
+- **Bounded memory:** identities of replies evicted from the ten-item history are kept up to a fixed limit, so long sessions do not grow without bound.
+
 Formal originals appear immediately, while stable fragments are automatically translated before the whole turn ends. Existing Chinese prefixes, reading position, and text selection are preserved. Compatible-service credentials are isolated by endpoint; OpenAI/Grok presets retain separate model choices, while native Gemini stays unchanged. Passive health checks do not generate text.
 
 Usage/statusLine sources and the read-only CLI adapter remain experimental; Web quota uses native accessibility in build78. After initial adapter setup, connecting a chat source automatically follows its usage without a separate usage-account confirmation. Settings provide supplementary acquisition and setup; unavailable identity clears previous values rather than falling back to another channel.
@@ -42,7 +51,7 @@ The build77 component workflow was withdrawn at the user's request. Its source, 
 - **Temporary history:** Keep the latest ten completed reply translations during this run; clear on exit. Clearing records preserves drafts, the Claude conversation, and monitoring.
 - **Account usage:** Connecting a chat automatically follows its Desktop, Web, or CLI source. Show reported five-hour/weekly percentages and reset times; Web settings offer explicit native reads; automatic Web reads require its selected window to remain foreground. Missing data is not zero, and a repeated CLI report does not imply a fresh server query.
 - **Table translation:** Ordinary tables retain rows, columns and values, with horizontal scrolling and Markdown copy. Gemini uses bounded nearby text to disambiguate cell wording while remaining translation-only. Complex merged tables have not been verified.
-- **Code segments:** Formal text starts translating after about three seconds without changes, before another tool event or overall completion. A stable continuation updates its existing segment. Tool progress and output are excluded. Each segment counts toward the ten recent translation records.
+- **Code segments:** A finished paragraph followed by a new one starts translating immediately; the still-growing tail translates after about three seconds without changes, before another tool event or overall completion. A stable continuation updates its existing segment. Tool progress and output are excluded. Each segment counts toward the ten recent translation records.
 - **Native appearance:** A pig-head menu icon with a capital A, translucent materials following system appearance, and compact controls.
 
 ## Requirements and scope

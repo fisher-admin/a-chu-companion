@@ -16,6 +16,16 @@ import ApplicationServices
         init(id: UUID = UUID(), location: Location) { self.id = id; self.location = location }
     }
     enum Outcome: Equatable { case inserted, sendKeyPressed, submitFailed(String) }
+    /// nspasteboard.org markers: clipboard managers skip transient items and never store concealed ones.
+    static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+    static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+    static func privateItem(_ text: String) -> NSPasteboardItem {
+        let item = NSPasteboardItem()
+        item.setString(text, forType: .string)
+        item.setData(Data(), forType: transientType)
+        item.setData(Data(), forType: concealedType)
+        return item
+    }
     struct Environment {
         var trusted: @MainActor () -> Bool = { TargetBridge.trusted }
         var available: @MainActor (Location) -> Bool = ManualInputDelivery.available
@@ -77,7 +87,7 @@ import ApplicationServices
         let board = environment.board
         let previous = (board.pasteboardItems ?? []).map { item in item.types.compactMap { type in item.data(forType: type).map { (type, $0) } } }
         board.clearContents()
-        guard board.setString(text, forType: .string) else { throw BridgeError.message("无法写入剪贴板，译文已保留。") }
+        guard board.writeObjects([Self.privateItem(text)]) else { throw BridgeError.message("无法写入剪贴板，译文已保留。") }
         let owned = board.changeCount
         defer {
             if board.changeCount == owned {

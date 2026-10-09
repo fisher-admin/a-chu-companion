@@ -94,7 +94,7 @@ final class TranslatorModel: ObservableObject {
         }
         trimHistory()
     }
-    private var retiredReplies: Set<String> = []
+    private var retiredReplies = RetiredIDs()
     @Published var readingHistory = false
     @Published var hasNewContent = false
     func resumeFollowing() {
@@ -183,7 +183,13 @@ final class TranslatorModel: ObservableObject {
     var onClaudeConnection: (ClaudeUsageChannel, String?) -> Void = { _, _ in }
     var onNonClaudeConnection: (String) -> Void = { _ in }
     private let permissionMonitor: AccessibilityPermissionMonitor
-    private var target: TargetBridge.Target?
+    private var target: TargetBridge.Target? {
+        didSet {
+            // A replaced or cleared connection no longer needs that app's full accessibility tree.
+            guard let old = oldValue?.app.processIdentifier, old != target?.app.processIdentifier else { return }
+            TargetBridge.releaseAccessibility(pid: old)
+        }
+    }
     var webInputBundle: String? {
         guard let target, target.app.bundleIdentifier != "com.anthropic.claudefordesktop" else { return nil }
         return target.app.bundleIdentifier

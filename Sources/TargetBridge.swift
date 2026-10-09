@@ -21,6 +21,8 @@ final class TargetBridge {
         var name: String { app.localizedName ?? "目标软件" }
     }
     typealias Outcome = ManualInputDelivery.Outcome
+    private static var accessibilityFlags = AccessibilityFlagLedger()
+    private static let optInFlags = ["AXManualAccessibility", "AXEnhancedUserInterface"]
 
     nonisolated static func nativeReplySupported(bundle: String?, conversation: String?) -> Bool {
         if bundle == "com.anthropic.claudefordesktop" || bundle == "local.achu.fixture" { return true }
@@ -72,8 +74,11 @@ final class TargetBridge {
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(axApp, 1)
         // Electron/Chromium expose focused controls after this accessibility opt-in.
-        AXUIElementSetAttributeValue(axApp, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        AXUIElementSetAttributeValue(axApp, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        // Only flags switched on here are recorded, so releasing restores the app's own setting.
+        for flag in optInFlags where accessibilityFlags.shouldEnable(pid: app.processIdentifier, flag: flag,
+                                                                      currentlyOn: attribute(axApp, flag) as? Bool == true) {
+            AXUIElementSetAttributeValue(axApp, flag as CFString, kCFBooleanTrue)
+        }
         guard let element = elementAttribute(axApp, kAXFocusedUIElementAttribute),
               (attribute(element, kAXSubroleAttribute) as? String) != kAXSecureTextFieldSubrole,
               (attribute(element, kAXEnabledAttribute) as? Bool) != false,
@@ -84,6 +89,16 @@ final class TargetBridge {
                       value: attribute(element, kAXValueAttribute) as? String, selection: selectedRange(element),
                       conversation: conversationURL(element), identity: identity(element))
     }
+    /// Full accessibility trees slow Chromium and Electron and confuse window managers;
+    /// switch off what the companion enabled once that app is no longer connected.
+    static func releaseAccessibility(pid: pid_t) {
+        let flags = accessibilityFlags.release(pid: pid)
+        guard !flags.isEmpty, NSRunningApplication(processIdentifier: pid)?.isTerminated == false else { return }
+        let axApp = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(axApp, 1)
+        for flag in flags { AXUIElementSetAttributeValue(axApp, flag as CFString, kCFBooleanFalse) }
+    }
+    static func releaseAllAccessibility() { accessibilityFlags.processes.forEach(releaseAccessibility) }
     static func conversationURL(_ element: AXUIElement) -> String? {
         var cursor: AXUIElement? = element
         for _ in 0..<30 {

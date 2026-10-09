@@ -163,6 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         webUsage.unbind(); model.replies.stop(); model.bridge.stop(); model.stopPermissionMonitoring(); usage.stop()
+        TargetBridge.releaseAllAccessibility()
     }
 }
 

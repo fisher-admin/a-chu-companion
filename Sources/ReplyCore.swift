@@ -34,6 +34,10 @@ struct ReplyAddress: Hashable, Comparable, Sendable {
 
 struct ReplyReadPending: LocalizedError, Sendable {
     let message: String
+    /// The page, transcript, message markers or author labels could not be resolved
+    /// at all, as opposed to a reply that is still being written. When this persists,
+    /// Claude's interface has changed and the user is told instead of waiting silently.
+    var structural = false
     var errorDescription: String? { message }
 }
 
@@ -615,7 +619,10 @@ enum ClaudeDecoder {
             expected -= 1
         }
         guard !tail.isEmpty else {
-            throw ReplyReadPending(message: "最新消息的正文或作者标记尚未完整，未使用部分内容。")
+            // While Claude thinks only the newest card lacks a body; when no card has a
+            // recognisable author marker, the labels themselves are no longer understood.
+            let anyDecoded = nodes.contains { !messages($0, format: format).isEmpty }
+            throw ReplyReadPending(message: "最新消息的正文或作者标记尚未完整，未使用部分内容。", structural: !anyDecoded)
         }
         return tail.reversed()
     }

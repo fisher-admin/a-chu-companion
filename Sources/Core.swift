@@ -2,7 +2,10 @@ import Foundation
 import OSLog
 import CryptoKit
 
-struct ServiceTransientError: LocalizedError, Sendable {
+/// A service failure that says how long the service should be left alone.
+protocol ServiceRetryDelay: Error { var seconds: TimeInterval { get } }
+
+struct ServiceTransientError: LocalizedError, Sendable, ServiceRetryDelay {
     let seconds: TimeInterval
     let reason: String
     var errorDescription: String? { reason + "；原文已保留，将按有限重试策略恢复。" }
@@ -49,7 +52,15 @@ actor TranslationServiceGate {
 }
 
 
-struct ServiceCooldown: LocalizedError, Sendable {
+/// A rejected key or project. Retrying the same credential cannot succeed, so the
+/// service is paused like a rate limit; a new key is a new gate scope.
+struct ServiceAuthorizationError: LocalizedError, Sendable, ServiceRetryDelay {
+    let seconds: TimeInterval
+    let reason: String
+    var errorDescription: String? { reason }
+}
+
+struct ServiceCooldown: LocalizedError, Sendable, ServiceRetryDelay {
     let seconds: TimeInterval
     var errorDescription: String? { "服务请求过于频繁，请等待 \(Int(seconds.rounded(.up))) 秒后重试。" }
     static func duration(_ value: String?, now: Date = Date()) -> TimeInterval {
@@ -116,6 +127,45 @@ enum DeliveryPolicy {
         return actual == inserted
     }
     static func restoreClipboard(ownedCount: Int, currentCount: Int) -> Bool { ownedCount == currentCount }
+}
+
+/// Retired reply identities keep a reply that is still visible in Claude from being
+/// re-added after the ten-item window evicted it. Only the newest identities matter:
+/// older replies fall outside the tracked range, so the oldest beyond the cap are
+/// dropped and long sessions use bounded memory.
+struct RetiredIDs {
+    private var order: [String] = []
+    private var members: Set<String> = []
+    let limit: Int
+    init(limit: Int = 512) { self.limit = max(1, limit) }
+    var count: Int { members.count }
+    var all: Set<String> { members }
+    func contains(_ id: String) -> Bool { members.contains(id) }
+    mutating func remove(_ id: String) {
+        guard members.remove(id) != nil else { return }
+        order.removeAll { $0 == id }
+    }
+    mutating func formUnion<S: Sequence>(_ ids: S) where S.Element == String {
+        for id in ids where members.insert(id).inserted { order.append(id) }
+        if order.count > limit {
+            let dropped = order.prefix(order.count - limit)
+            members.subtract(dropped); order.removeFirst(dropped.count)
+        }
+    }
+}
+
+/// Remembers which accessibility opt-ins the companion switched on in another app, so
+/// exactly those can be switched back off when the connection ends. Flags the app had
+/// already enabled itself are never recorded and never touched.
+struct AccessibilityFlagLedger {
+    private var enabled: [Int32: Set<String>] = [:]
+    /// True when the flag should be switched on now.
+    mutating func shouldEnable(pid: Int32, flag: String, currentlyOn: Bool) -> Bool {
+        guard !currentlyOn else { return false }
+        return enabled[pid, default: []].insert(flag).inserted
+    }
+    mutating func release(pid: Int32) -> [String] { enabled.removeValue(forKey: pid).map { $0.sorted() } ?? [] }
+    var processes: Set<Int32> { Set(enabled.keys) }
 }
 
 enum TargetRefreshPolicy {
@@ -318,10 +368,20 @@ struct AITranslator {
             let seconds = await gate.fail(ticket, cooldown: nil)
             throw ServiceTransientError(seconds: seconds, reason: "翻译服务暂时不可用（HTTP \(http.statusCode)）")
         }
-        await gate.success(ticket)
-        switch provider {
-        case .openAI: return try AIProtocol.response(data, status: http.statusCode)
-        case .gemini: return try GeminiProtocol.response(data, status: http.statusCode)
+        func parse() throws -> String {
+            switch provider {
+            case .openAI: return try AIProtocol.response(data, status: http.statusCode)
+            case .gemini: return try GeminiProtocol.response(data, status: http.statusCode)
+            }
         }
+        if [401, 403].contains(http.statusCode) {
+            let reason: String
+            do { _ = try parse(); reason = "翻译服务拒绝了密钥或项目访问（HTTP \(http.statusCode)）" }
+            catch { reason = error.localizedDescription }
+            let seconds = await gate.fail(ticket, cooldown: 600)
+            throw ServiceAuthorizationError(seconds: seconds, reason: reason)
+        }
+        await gate.success(ticket)
+        return try parse()
     }
 }

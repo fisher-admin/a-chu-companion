@@ -12,6 +12,12 @@ import Translation
     @Published var chinese = ""
     @Published var sourceName = "Claude"
     @Published var historyChoices: [ReplyWork] = []
+    /// Set after Claude's page, transcript or message markers stay unresolvable.
+    @Published private(set) var readError: String?
+    var structureTimeout: TimeInterval = 45
+    var clock: () -> TimeInterval = { Date().timeIntervalSinceReferenceDate }
+    private var structuralSince: TimeInterval?
+    private var appleTail: Task<Void, Never>?
     @Published var showHistoryPicker = false
     var showPanel: () -> Void = {}
     var onReply: (String, String, String, TranslationLanguage) -> Void = { _, _, _, _ in }
@@ -52,14 +58,17 @@ import Translation
         if paused { historyRequestID = nil }
     }
     private var pipeline: ReplyPipeline?
-    private var retiredRecords: Set<String> = []
+    private var retiredRecords = RetiredIDs()
     private var activeSession: TranslationSession?
     private var systemContinuation: CheckedContinuation<TranslationSession, Error>?
+    var pipelineRecordCount: Int { pipeline?.recordCount ?? 0 }
     var canRetry: Bool { !translating && pipeline?.hasFailures == true }
 
     private func translationPipeline() -> ReplyPipeline {
         if let pipeline { return pipeline }
-        let pipeline = ReplyPipeline(incremental: stagePreview) { [weak self] text in
+        // Remote services take a few slices at once; system translation shares one session.
+        let concurrency = engine == "apple" && testTranslation == nil ? 1 : 3
+        let pipeline = ReplyPipeline(incremental: stagePreview, concurrency: concurrency) { [weak self] text in
             guard let self else { throw CancellationError() }
             if let testTranslation { return try await testTranslation(text) }
             if engine == "apple" { return try await translateApple(text) }
@@ -67,7 +76,8 @@ import Translation
             let base = baseURL, selectedModel = model, selectedLanguage = language
             let key = try await Credentials.readAsync(for: provider, baseURL: base)
             let request = try provider.request(text: text, baseURL: base, model: selectedModel, key: key, direction: .toChinese(selectedLanguage))
-            return SystemTranslationProtection.simplified(try await AITranslator.translate(request, provider: provider))
+            let raw = try await AITranslator.translate(request, provider: provider)
+            return SystemTranslationProtection.simplified(try TranslationCleanup.normalize(raw, source: text))
         }
         if engine != "apple" {
             pipeline.fallback = { [weak self] text in
@@ -87,8 +97,13 @@ import Translation
             onReply(id, foreign, value, language); onReplyState(id, complete)
         }
         pipeline.onCompletion = { [weak self] id, complete in self?.onReplyState(id, complete) }
-        pipeline.onStatus = { [weak self] message, busy in self?.status = message; self?.translating = busy }
-        pipeline.retire(retiredRecords)
+        pipeline.onStatus = { [weak self] message, busy in
+            guard let self else { return }
+            if readError == nil { status = message }
+            translating = busy
+        }
+        pipeline.onIdle = { [weak self] in self?.translating = false }
+        pipeline.retire(retiredRecords.all)
         self.pipeline = pipeline
         return pipeline
     }
@@ -139,6 +154,8 @@ import Translation
         translating = pipeline?.busy == true
         errors = 0
         readRetrySeconds = 1
+        structuralSince = nil
+        if readError != nil { readError = nil; status = "Claude 界面已恢复，继续读取。" }
     }
     func startPolling() {
         guard watching, let source, polling == nil else { return }
@@ -184,7 +201,19 @@ import Translation
         retiredRecords.remove(work.id)
         showHistoryPicker = false; historyChoices = []; onManualReply(work.id); translationPipeline().submit(work)
     }
+    /// Fallbacks from concurrent remote slices share one system session; run them in turn.
     private func translateApple(_ text: String) async throws -> String {
+        let previous = appleTail
+        let work = Task { @MainActor [weak self] () async throws -> String in
+            await previous?.value
+            try Task.checkCancellation()
+            guard let self else { throw CancellationError() }
+            return try await self.translateAppleNow(text)
+        }
+        appleTail = Task { _ = try? await work.value }
+        return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+    }
+    private func translateAppleNow(_ text: String) async throws -> String {
         let session: TranslationSession
         if let activeSession { session = activeSession }
         else {
@@ -238,10 +267,25 @@ import Translation
         if let stopped = error as? ReplyReadStopped { pause(stopped.localizedDescription); return }
         let before = transientReadDisplay.flatMap { status == $0.display ? $0.before : nil } ?? status
         if let pending = error as? ReplyReadPending {
-            errors = 0; readRetrySeconds = 1; status = "等待 Claude 原文，自动读取会继续检查。" + pending.localizedDescription
+            errors = 0; readRetrySeconds = 1
+            if pending.structural {
+                let now = clock(); let since = structuralSince ?? now; structuralSince = since
+                if now - since >= structureTimeout {
+                    readRetrySeconds = 3
+                    if readError == nil {
+                        readError = "Claude 界面结构已变化，暂时无法读取回复（" + pending.message + "）。请确认 Claude 窗口仍显示对话；Claude 更新后如仍无法读取，请重新按 ⌃⌥E 连接或更新A畜伴侣。自动读取会继续检查。"
+                        showPanel()
+                    }
+                    transientReadDisplay = nil; status = readError ?? ""
+                    return
+                }
+            }
+            if readError != nil { return }
+            status = "等待 Claude 原文，自动读取会继续检查。" + pending.localizedDescription
         } else {
             errors += 1
             readRetrySeconds = min(60, pow(2, Double(min(errors - 1, 6))))
+            if readError != nil { return }
             status = "读取暂时失败，\(Int(readRetrySeconds))秒后重新检查 Claude 页面；自动读取保持开启。"
         }
         transientReadDisplay = (before, status)
@@ -272,6 +316,7 @@ import Translation
         pipeline?.cancel(); pipeline = nil; cancelSystem(); translating = false
         source = nil; lastUsageCandidate = nil; lastCompletedCandidate = nil; historyRequestID = nil; historyChoices = []; showHistoryPicker = false
         completedConversation = ""
+        readError = nil; structuralSince = nil
         status = "自动读取已停止。"
         if clear { original = ""; chinese = "" }
     }
