@@ -1,0 +1,66 @@
+{
+  "head": {
+    "exit_code": 0,
+    "value": "20e901624cbff43efd69d9931e29e9a51b5f2790"
+  },
+  "branch": {
+    "exit_code": 0,
+    "value": "codex/gemini-translation"
+  },
+  "status": {
+    "exit_code": 0,
+    "value": "M TEST_PLAN.md\n M docs/superpowers/plans/2026-10-04-gemini-translation.md"
+  },
+  "untracked": {
+    "exit_code": 0,
+    "value": ""
+  },
+  "swift": {
+    "exit_code": 0,
+    "value": "Apple Swift version 6.3.2 (swiftlang-6.3.2.1.108 clang-2100.1.1.101)\nTarget: arm64-apple-macosx26.0"
+  },
+  "os": {
+    "exit_code": 0,
+    "value": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83"
+  },
+  "arch": {
+    "exit_code": 0,
+    "value": "arm64"
+  },
+  "installed": {
+    "CFBundleShortVersionString": "1.1.6",
+    "CFBundleVersion": "33",
+    "CFBundleIdentifier": "local.achu.companion"
+  },
+  "source_hashes": {
+    "Sources/AccessibilityPermissionMonitor.swift": "ebf507feb5f219aacba6d8fd811fb58c29e218f32f4363e144924396715434f0",
+    "Sources/AppMenus.swift": "98ede98f01288c598fd4fc990fa4980f4fcc61abb618d2ad8ef99137593e4925",
+    "Sources/ClaudeAccessibility.swift": "b9c9ad294490f24af650a243c0e3e3368bd2b8f336b27381f62012c0337f9600",
+    "Sources/ClaudeDesktopSession.swift": "af9da29ec0d7bd2ede357b984ccc2c5366521d62c91218f8a6b4a7c22c58a7c9",
+    "Sources/ClaudeUsageCore.swift": "30f7d350a4a57aeda678c400c07fde783fa4ca5134b6fb1a9ea60627f4ca8f58",
+    "Sources/ClaudeUsageMonitor.swift": "beebd0d1479951bbd97bd0df4a0c12d269eb8883043e2edf45f9059fc85717a4",
+    "Sources/ClaudeUsageView.swift": "cb528871b4a01c217d617a671f4df8661bf062e09bf72c1b56fa0c91b6472b19",
+    "Sources/CompanionIcon.swift": "9b627e58f7abce75067f032b20a664cd6df68d3d34367a8f064380f23c5b8bd4",
+    "Sources/ConversationReplyTracker.swift": "844acde264b49f4c0e15ac25c909445420275d8d2314d5fffbaa83f01799af28",
+    "Sources/Core.swift": "e352cb1232cdae7890455bff4b29fd88e7ef4b8576862bdcff4e19af7c7a675c",
+    "Sources/Credentials.swift": "687cd921af4473d77c9f14b84f57f419353962588497c212ce2457172875da76",
+    "Sources/Editor.swift": "6cf7b8e3a38bbdf5cba8305c571582e78255ec94dfc1b72c18d9314d8523ae26",
+    "Sources/GeminiTranslation.swift": "a29e92ed2a45cbc4ae7b9cf20320dcdcca4986e9ad9d189d491b7120a67920cc",
+    "Sources/GlassBackground.swift": "b8ff907af08c6c021d859bf8a8de5ace6b975677cedffccf51e8158e68d6593a",
+    "Sources/Main.swift": "9b675cf913dec1570d65a212ce389b23f8078b079a88dfe6b0b0bc62ced5d10a",
+    "Sources/MessageText.swift": "5adbbd803557998169fce5167839d8cbc1b949b81a3691df293a10b40c2fae87",
+    "Sources/ReaderPreferences.swift": "61f1df6683ab93e05591e22e0d2a22dd7271a6054bade660862326796434bf67",
+    "Sources/ReplyCore.swift": "ffaf6076e74e12815f7b900c28d077b25d57f36a28d2faac751cc4d54f8d9224",
+    "Sources/ReplyMonitor.swift": "514d4efcdae1c460b7abf273982918c6307375702fc35fea5ef60b7062687436",
+    "Sources/ReplyWorkQueue.swift": "83af0f6bf31c1f8df07e10d1a3f42f07782332a7342f5c39cf165046fcd799ba",
+    "Sources/TargetBridge.swift": "0f5738021d219bc5c1dcdf422fd13e779d7a2b8bedd11c7ba599574ee6d9a3b7",
+    "Sources/TextTranslation.swift": "9f83df454022c7c31fd682e9dd7d5765610f7c321c17c0ff2d60520638076b38",
+    "Sources/TranslationSettingsView.swift": "43d8935b089ec7669fb19f8de72c8a032b3fc4445bda1d3a7ca727d2c9fdce1e",
+    "Sources/TranslatorModel.swift": "d61c7571d3ddc0a7e684ed1069e422b0db7915e97600e1982576a51fae1063a5",
+    "Sources/Views.swift": "28a2d89b542c338491f21b26fee84f31cbe543c1d0ce1ef7f42d96a4e6637e35"
+  },
+  "tracked_doc_hashes": {
+    "TEST_PLAN.md": "4352d0dc090ac7bd7f90e8c69197764d05b781bdeec2a51c5e0c34355c6a7c53",
+    "docs/superpowers/plans/2026-10-04-gemini-translation.md": "5996c37594a4ac11805ea5615000fbb9817485563d0553bcd4a68c970fe9da9b"
+  }
+}

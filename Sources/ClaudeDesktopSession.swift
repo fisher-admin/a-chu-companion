@@ -46,6 +46,7 @@ enum ClaudeDesktopSession {
         return (version, result)
     }
     static func read(allowPrompt: Bool = false) throws -> ClaudeSession {
+        guard !CompanionPreferences.simulated else { throw ClaudeUsageError.keychain }
         let path = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Claude/Cookies").path
         let (version, cookies) = try cookies(at: path)
         guard let session = cookies["sessionKey"], let org = cookies["lastActiveOrg"] else { throw ClaudeUsageError.desktopMissing }
@@ -60,7 +61,9 @@ enum ClaudeDesktopSession {
                                        kSecReturnData as String: true,
                                        kSecMatchLimit as String: kSecMatchLimitOne,
                                        kSecUseAuthenticationContext as String: context]
-            guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let value = item as? Data else { throw ClaudeUsageError.keychain }
+            guard allowPrompt || context.interactionNotAllowed else { throw ClaudeUsageError.keychain }
+            let status = try KeychainAccess.perform(allowPrompt: allowPrompt) { SecItemCopyMatching(query as CFDictionary, &item) }
+            guard status == errSecSuccess, let value = item as? Data else { throw ClaudeUsageError.keychain }
             password = value
         }
         defer { password.resetBytes(in: 0..<password.count) }
@@ -106,18 +109,25 @@ enum ClaudeDesktopSession {
 
 enum ClaudeSessionStore {
     private static let service = "local.achu.companion.claude-session"
-    static func read() throws -> ClaudeSession {
+    static func read(allowPrompt: Bool = false) throws -> ClaudeSession {
+        guard !CompanionPreferences.simulated else { throw ClaudeUsageError.keychain }
         var item: CFTypeRef?
-        let context = LAContext(); context.interactionNotAllowed = true
+        let context = LAContext(); context.interactionNotAllowed = !allowPrompt
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                    kSecReturnData as String: true, kSecUseAuthenticationContext as String: context]
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data,
+        guard allowPrompt || context.interactionNotAllowed else { throw ClaudeUsageError.keychain }
+        let status = try KeychainAccess.perform(allowPrompt: allowPrompt) { SecItemCopyMatching(query as CFDictionary, &item) }
+        guard status == errSecSuccess, let data = item as? Data,
               let fields = try? JSONDecoder().decode([String: String].self, from: data), let key = fields["session"], let org = fields["organization"] else { throw ClaudeUsageError.connection }
         _ = try ClaudeUsageRequest.make(sessionKey: key, organization: org)
         let fingerprint = SHA256.hash(data: Data((key + ":" + org.lowercased()).utf8)).map { String(format: "%02x", $0) }.joined()
         return .init(key: key, organization: org.lowercased(), fingerprint: fingerprint)
     }
     static func save(key: String, organization: String) throws {
+        guard !CompanionPreferences.simulated else { throw ClaudeUsageError.keychain }
+        try KeychainAccess.perform { try saveUnlocked(key: key, organization: organization) }
+    }
+    private static func saveUnlocked(key: String, organization: String) throws {
         _ = try ClaudeUsageRequest.make(sessionKey: key, organization: organization)
         let data = try JSONEncoder().encode(["session": key, "organization": organization.lowercased()])
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "usage"]
@@ -127,5 +137,9 @@ enum ClaudeSessionStore {
         var attributes = query; attributes[kSecValueData as String] = data
         guard SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess else { throw ClaudeUsageError.keychain }
     }
-    static func remove() { SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service] as CFDictionary) }
+    static func remove() -> Bool {
+        guard !CompanionPreferences.simulated else { return true }
+        guard let status = try? KeychainAccess.perform({ SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service] as CFDictionary) }) else { return false }
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
 }

@@ -19,6 +19,7 @@ enum ClaudeUsageError: LocalizedError {
 struct ClaudeUsageWindow: Equatable, Sendable {
     let usedPercentage: Double
     let resetsAt: Date?
+    var resetDescription: String? = nil
 }
 
 enum ClaudeUsageDisplay {
@@ -37,6 +38,7 @@ struct ClaudeUsageSnapshot: Equatable, Sendable {
     let fiveHour: ClaudeUsageWindow?
     let sevenDay: ClaudeUsageWindow?
     let observedAt: Date
+    var reportedPlan: ClaudePlan? = nil
     func isStale(at date: Date) -> Bool { date.timeIntervalSince(observedAt) > 600 }
     static func decode(_ data: Data, at date: Date = Date()) throws -> Self {
         struct Window: Decodable { let utilization: Double?; let resets_at: String? }

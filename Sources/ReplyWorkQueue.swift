@@ -5,7 +5,7 @@ struct ReplyWork: Equatable, Sendable, Identifiable {
     let candidate: ReplyCandidate
     let conversation: String
     var manual = false
-    var id: String { ReplyIdentity.id(conversation: conversation, ordinal: candidate.ordinal) }
+    var id: String { ReplyIdentity.id(conversation: conversation, ordinal: candidate.ordinal, segment: candidate.segment) }
 }
 
 struct ReplyWorkQueue {

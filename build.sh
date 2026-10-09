@@ -13,9 +13,13 @@ staging=$(mktemp -d "$PWD/.build/package.XXXXXX")
 trap 'rm -rf "$staging"' EXIT
 app="$staging/A畜伴侣.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-swiftc -swift-version 5 -O -target arm64-apple-macos15.0 -module-cache-path "$PWD/.build/cache" Sources/*.swift -o "$app/Contents/MacOS/AChuCompanion"
+sources=(Sources/*.swift)
+sources=("${(@)sources:#Sources/ManagedWebUsage.swift}")
+swiftc -swift-version 5 -O -target arm64-apple-macos15.0 -module-cache-path "$PWD/.build/cache" "${sources[@]}" -o "$app/Contents/MacOS/AChuCompanion"
 swiftc -swift-version 5 -module-cache-path "$PWD/.build/cache" Sources/CompanionIcon.swift Tools/GenerateIcons.swift -o .build/generate-icons
 .build/generate-icons "$staging/AChuCompanion.iconset"
+mkdir -p "$app/Contents/Resources/Bridge"
+cp Bridge/bridge.py "$app/Contents/Resources/Bridge/"
 iconutil -c icns -o "$app/Contents/Resources/AChuCompanion.icns" "$staging/AChuCompanion.iconset"
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -26,8 +30,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleDisplayName</key><string>A畜伴侣</string>
 <key>CFBundleExecutable</key><string>AChuCompanion</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.1.4</string>
-<key>CFBundleVersion</key><string>28</string>
+<key>CFBundleShortVersionString</key><string>1.2.1</string>
+    <key>CFBundleVersion</key><string>81</string>
 <key>CFBundleIconFile</key><string>AChuCompanion</string>
 <key>LSMinimumSystemVersion</key><string>15.0</string>
 <key>LSUIElement</key><true/>

@@ -63,12 +63,57 @@ import Foundation
         check(!DeliveryPolicy.canProceed(sameApp: true, sameWindow: true, sameElement: false), "changed input blocked")
         check(TargetRefreshPolicy.canReuseTarget(appAlive: true, sameConversation: true, initialNewConversationTransition: false),
               "captured target stays reusable while companion has focus")
-        check(TargetRefreshPolicy.canReuseTarget(appAlive: true, sameConversation: false, initialNewConversationTransition: true),
-              "new chat route transition remains allowed")
+        check(!TargetRefreshPolicy.canReuseTarget(appAlive: true, sameConversation: false, initialNewConversationTransition: true),
+              "a normal refresh cannot authorize a new-chat route transition")
         check(!TargetRefreshPolicy.canReuseTarget(appAlive: true, sameConversation: false, initialNewConversationTransition: false),
               "changed Claude conversation remains blocked")
         check(!TargetRefreshPolicy.canReuseTarget(appAlive: false, sameConversation: true, initialNewConversationTransition: false),
               "closed target application remains blocked")
+        func recapture(alive: Bool = true, window: Bool = true, conversation: Bool = true,
+                       element: Bool = false, identity: Bool = true, known: Bool = true, stable: Bool = true) -> Bool {
+            TargetRefreshPolicy.canRecapture(appAlive: alive, sameWindow: window, sameConversation: conversation,
+                                             sameElement: element, verifiedIdentity: identity, knownConversation: known, stable: stable)
+        }
+        check(recapture(), "a verified replacement composer in the same conversation can start a new job")
+        check(!recapture(window: false), "replacement composer in another window is refused")
+        check(!recapture(conversation: false), "replacement composer in another conversation is refused")
+        check(!recapture(identity: false), "another focused input cannot masquerade as the composer")
+        check(!recapture(known: false), "an unknown conversation cannot authorize a replacement input")
+        check(!recapture(stable: false), "a focus or draft change during capture prevents a new job")
+        check(!recapture(alive: false), "a terminated application cannot authorize replacement capture")
+        check(recapture(element: true, identity: false, known: false), "an unchanged native input can be snapshotted without guessing a replacement")
+        check(TargetRefreshPolicy.composerSource(focusedEditable: true, focusUnavailable: false,
+                                                 companionActive: true, capturedEditable: true) == .focused,
+              "a reported editable focus remains the first candidate")
+        check(TargetRefreshPolicy.composerSource(focusedEditable: false, focusUnavailable: true,
+                                                 companionActive: true, capturedEditable: true) == .captured,
+              "Claude's background page focus preserves the explicitly captured live composer")
+        check(TargetRefreshPolicy.composerSource(focusedEditable: false, focusUnavailable: true,
+                                                 companionActive: false, capturedEditable: true) == .none,
+              "another foreground application cannot authorize captured-composer recovery")
+        check(TargetRefreshPolicy.composerSource(focusedEditable: false, focusUnavailable: false,
+                                                 companionActive: true, capturedEditable: true) == .none,
+              "a focused button or dialog cannot be treated as unavailable background focus")
+        check(TargetRefreshPolicy.composerSource(focusedEditable: false, focusUnavailable: true,
+                                                 companionActive: true, capturedEditable: false) == .none,
+              "a stale disabled or unreadable captured composer remains refused")
+        let newURL = "https://claude.ai/new", firstURL = "https://claude.ai/chat/test-a", secondURL = "https://claude.ai/chat/test-b"
+        var own = OwnSendTransition(initial: newURL)
+        check(own.observe(newURL) == .waiting && own.observe(nil) == .waiting, "a new conversation waits for a verifiable post-send route")
+        check(own.observe(firstURL) == .waiting && own.observe(firstURL) == .pinned(firstURL), "two matching post-send observations pin the saved conversation")
+        var conflict = OwnSendTransition(initial: newURL)
+        check(conflict.observe(firstURL) == .waiting && conflict.observe(secondURL) == .invalid && conflict.observe(firstURL) == .invalid,
+              "conflicting post-send routes permanently invalidate that transition")
+        var wrongHost = OwnSendTransition(initial: newURL)
+        check(wrongHost.observe("https://example.com/claude.ai/chat/test-a") == .invalid, "a URL containing Claude's name is not a Claude route")
+        var otherMode = OwnSendTransition(initial: newURL)
+        check(otherMode.observe("https://claude.ai/epitaxy/local_test") == .invalid, "a Chat send cannot authorize a Code route")
+        var codeTransition = OwnSendTransition(initial: "https://claude.ai/epitaxy")
+        check(codeTransition.observe("https://claude.ai/epitaxy/local_test") == .waiting &&
+              codeTransition.observe("https://claude.ai/epitaxy/local_test") == .pinned("https://claude.ai/epitaxy/local_test"),
+              "a controlled new Code send pins only its own saved Code route")
+        var pinned = OwnSendTransition(initial: firstURL)
+        check(pinned.observe(secondURL) == .invalid, "a saved conversation cannot acquire a new-route transition")
         check(DeliveryPolicy.expectedValue(before: "你好 world", range: NSRange(location: 3, length: 5), inserted: "there") == "你好 there", "selected text replacement verified")
         check(DeliveryPolicy.expectedValue(before: "😀", range: NSRange(location: 2, length: 0), inserted: "hello") == "😀hello", "UTF16 selection after emoji")
         check(DeliveryPolicy.expectedValue(before: "abc", range: NSRange(location: 99, length: 0), inserted: "x") == nil, "invalid selection rejected")

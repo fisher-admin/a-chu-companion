@@ -50,10 +50,37 @@ final class UsageHTTP: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+private final class UsageLoadRace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var loads = 0
+    private var requests = 0
+    private let busyCalls: Set<Int>
+    private let alwaysBusy: Bool
+    private let unsafe: Bool
+    init(busyCalls: Set<Int> = [], alwaysBusy: Bool = false, unsafe: Bool = false) {
+        self.busyCalls = busyCalls; self.alwaysBusy = alwaysBusy; self.unsafe = unsafe
+    }
+    var loadCount: Int { lock.withLock { loads } }
+    var requestCount: Int { lock.withLock { requests } }
+    func connection() throws -> ClaudeSession {
+        precondition(!Thread.isMainThread)
+        let call = lock.withLock { loads += 1; return loads }
+        if unsafe { throw KeychainAccessError.unsafe }
+        if alwaysBusy || busyCalls.contains(call) { throw KeychainAccessError.busy }
+        return .init(key: "sk-ant-sid01-fixtureonlyabcdefghijklmnop",
+            organization: "12345678-1234-1234-1234-123456789abc", fingerprint: "race-fixture")
+    }
+    func fetch(_ connection: ClaudeSession) async throws -> (ClaudeUsageSnapshot, ClaudePlan) {
+        lock.withLock { requests += 1 }
+        return (.init(fiveHour: .init(usedPercentage: 47, resetsAt: nil),
+            sevenDay: nil, observedAt: Date()), .pro)
+    }
+}
+
 @main struct UsageMonitorTests {
     @MainActor static func main() async throws {
-        let keys = ["usageConnected", "usageSource"].map { ($0, UserDefaults.standard.object(forKey: $0)) }
-        defer { for (key, value) in keys { UserDefaults.standard.set(value, forKey: key) } }
+        let keys = ["usageConnected", "usageSource"].map { ($0, CompanionPreferences.store.object(forKey: $0)) }
+        defer { for (key, value) in keys { CompanionPreferences.store.set(value, forKey: key) } }
         let state = UsageState()
         let monitor = ClaudeUsageMonitor(load: { _, _ in state.connection() }, fetch: { try await state.fetch($0) }, enabled: { true })
         defer { monitor.stop() }
@@ -61,21 +88,22 @@ final class UsageHTTP: URLProtocol, @unchecked Sendable {
         try await waitUntil("first request starts") { state.waiting(1) }
         for _ in 0..<8 { monitor.refresh() }
         state.complete(1)
-        try await waitUntil("coalesced follow-up starts") { state.waiting(2) }
-        state.complete(2)
-        try await waitUntil("coalesced refresh completes") { !monitor.refreshing }
-        precondition(state.count() == 2 && !monitor.refreshing && monitor.snapshot?.fiveHour?.usedPercentage == 2)
-        print("PASS: overlapping reply refreshes coalesce into one latest follow-up")
+        try await waitUntil("single-flight refresh completes") { !monitor.refreshing }
+        precondition(state.count() == 1 && monitor.snapshot?.fiveHour?.usedPercentage == 1)
         monitor.refresh()
-        try await waitUntil("old-account request starts") { state.waiting(3) }
-        state.changeAccount(); state.complete(3)
-        try await waitUntil("new-account request starts") { state.waiting(4) }
+        try await waitUntil("cached refresh finishes") { !monitor.refreshing }
+        precondition(state.count() == 1)
+        print("PASS: overlapping refreshes share one request and success cooldown prevents another fetch")
+        monitor.refresh(force: true)
+        try await waitUntil("old-account request starts") { state.waiting(2) }
+        state.changeAccount(); state.complete(2)
+        try await waitUntil("new-account request starts") { state.waiting(3) }
         precondition(monitor.snapshot == nil && monitor.plan == .unknown)
-        state.complete(4)
+        state.complete(3)
         try await waitUntil("new-account refresh completes") { !monitor.refreshing }
         precondition(monitor.snapshot?.fiveHour?.usedPercentage == 90 && monitor.plan == .max)
         print("PASS: an account switch discards the old in-flight result and fetches the current account")
-        state.fail(.network); monitor.refresh()
+        state.fail(.network); monitor.refresh(force: true)
         try await waitUntil("network failure is published") { monitor.stale && !monitor.refreshing }
         precondition(monitor.stale && monitor.snapshot?.fiveHour?.usedPercentage == 90)
         monitor.stop()
@@ -114,13 +142,71 @@ final class UsageHTTP: URLProtocol, @unchecked Sendable {
         let request = try ClaudeUsageRequest.make(sessionKey: cookie, organization: "12345678-1234-1234-1234-123456789abc")
         _ = try await client.data(request)
         precondition(UsageHTTP.seen?.httpMethod == "GET" && UsageHTTP.seen?.httpBody == nil)
-        for (status, expected) in [(401, ClaudeUsageError.expired),(403,.unavailable),(429,.rateLimited),(503,.unavailable),(302,.unavailable)] {
+        for (status, expected) in [(401, ClaudeUsageError.expired),(403,.unavailable),(503,.unavailable),(302,.unavailable)] {
             UsageHTTP.code = status
             do { _ = try await client.data(request); preconditionFailure() }
             catch let error as ClaudeUsageError { precondition(error == expected) }
         }
+        UsageHTTP.code = 429
+        do { _ = try await client.data(request); preconditionFailure() }
+        catch let error as ServiceCooldown { precondition(error.seconds == 60) }
         print("PASS: authentication, denial, throttling, server failure and redirects stay distinct from successful data")
-        print("8 usage integration tests passed")
+
+        let initialRace = UsageLoadRace(busyCalls: [1, 2])
+        let contended = ClaudeUsageMonitor(load: { _, _ in try initialRace.connection() },
+            fetch: { try await initialRace.fetch($0) }, enabled: { true })
+        contended.refresh()
+        try await waitUntil("transient initial credential contention ends") { !contended.refreshing }
+        precondition(initialRace.requestCount == 1 && initialRace.loadCount == 4
+            && contended.snapshot?.fiveHour?.usedPercentage == 47 && !contended.stale,
+            "A brief competing translation read must not permanently suppress the reply-triggered usage refresh")
+        contended.stop()
+        print("PASS: a reply-triggered usage refresh recovers from temporary credential contention")
+
+        let postRace = UsageLoadRace(busyCalls: [2, 3])
+        let checked = ClaudeUsageMonitor(load: { _, _ in try postRace.connection() },
+            fetch: { try await postRace.fetch($0) }, enabled: { true })
+        checked.refresh()
+        try await waitUntil("post-request identity contention ends") { !checked.refreshing }
+        precondition(postRace.requestCount == 1 && postRace.loadCount == 4
+            && checked.snapshot?.fiveHour?.usedPercentage == 47,
+            "A transient identity-check conflict must not discard valid data or repeat the HTTP request")
+        checked.stop()
+        print("PASS: post-request identity verification retries only the credential read, not HTTP")
+
+        let blockedRace = UsageLoadRace(alwaysBusy: true)
+        let blocked = ClaudeUsageMonitor(load: { _, _ in try blockedRace.connection() },
+            fetch: { try await blockedRace.fetch($0) }, enabled: { true })
+        blocked.refresh()
+        try await waitUntil("persistent contention reaches its bound") { !blocked.refreshing }
+        precondition(blockedRace.loadCount == 21 && blockedRace.requestCount == 0 && blocked.snapshot == nil)
+        blocked.stop()
+        print("PASS: persistent usage credential contention is bounded without a network request")
+
+        let cancelledRace = UsageLoadRace(alwaysBusy: true)
+        let cancelledLoad = ClaudeUsageMonitor(load: { _, _ in try cancelledRace.connection() },
+            fetch: { try await cancelledRace.fetch($0) }, enabled: { true })
+        cancelledLoad.refresh()
+        try await waitUntil("credential contention begins before stopping") { cancelledRace.loadCount == 1 }
+        var heartbeat = false
+        await Task { @MainActor in heartbeat = true }.value
+        precondition(heartbeat)
+        print("PASS: the main actor stays responsive during usage credential backoff")
+        cancelledLoad.stop()
+        try await Task.sleep(for: .milliseconds(250))
+        precondition(cancelledRace.loadCount == 1 && cancelledRace.requestCount == 0
+            && cancelledLoad.snapshot == nil && !cancelledLoad.refreshing)
+        print("PASS: stopping usage during contention prevents another read or network request")
+
+        let unsafeRace = UsageLoadRace(unsafe: true)
+        let unsafeLoad = ClaudeUsageMonitor(load: { _, _ in try unsafeRace.connection() },
+            fetch: { try await unsafeRace.fetch($0) }, enabled: { true })
+        unsafeLoad.refresh()
+        try await waitUntil("unsafe credential policy is rejected") { !unsafeLoad.refreshing }
+        precondition(unsafeRace.loadCount == 1 && unsafeRace.requestCount == 0 && unsafeLoad.snapshot == nil)
+        unsafeLoad.stop()
+        print("PASS: unsafe usage credential policy is not treated as transient contention")
+        print("14 usage integration tests passed")
     }
 
     @MainActor static func waitUntil(_ event: String, _ condition: () -> Bool) async throws {

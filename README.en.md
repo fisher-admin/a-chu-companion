@@ -13,16 +13,45 @@ AChu Companion is a native macOS menu bar app that combines Chinese composition,
 
 This is an independent community project, not an Anthropic or official Claude product. It reduces copying and switching between tools, but does not guarantee that translated prompts are more accurate than the Chinese originals.
 
+## Current development changes
+
+Current development build **1.2.1 build81** is based on build78 and ports the reviewed improvements from 1.2.0, without changing Desktop/Web/CLI sending, usage sources, Gemini settings, table display or per-segment records:
+
+- **Faster segment translation:** a finished paragraph followed by a new one translates immediately; the tail still waits about three seconds of stability. Cloud translation runs up to three slices at once and still renders strictly in source order; system translation stays one slice at a time.
+- **Service pause:** a rejected key or project (401/403) pauses that service like a rate limit, so later slices go straight to system translation instead of repeating failed requests. A new key is tried again.
+- **Chatter cleanup only:** remove an added "Here is the translation:" style preamble, a code fence wrapped around the whole answer, and added outer quotes. Language, length and meaning are not checked; only an unpaired fence makes that slice use system translation.
+- **Interface-change warning:** if Claude's page, transcript or message markers stay unrecognised for about 45 seconds, a clear warning appears; reading continues and clears it on recovery. Thinking and tool runs never trigger it.
+- **Clipboard and accessibility:** translations placed on the clipboard for insertion carry transient and concealed markers, which ask clipboard tools not to keep them. Tools that honour these markers do not record the text, but compliance depends on each third-party tool; it is not guaranteed for all of them. When the connection moves to another app or the companion quits, the Chrome/Electron accessibility options it enabled for reading are switched back off; settings the app already had are untouched.
+- **Bounded memory:** replies evicted from the ten-item history are remembered by conversation, message and segment, with many segments of one message compressed into ranges, keeping only recent conversations and message ranges. Long sessions stay bounded, and a Code reply with hundreds of segments cannot bring older segments that are still on screen back into the history.
+
+Formal originals appear immediately, while stable fragments are automatically translated before the whole turn ends. Existing Chinese prefixes, reading position, and text selection are preserved. Compatible-service credentials are isolated by endpoint; OpenAI/Grok presets retain separate model choices, while native Gemini stays unchanged. Passive health checks do not generate text.
+
+Usage/statusLine sources and the read-only CLI adapter remain experimental; Web quota uses native accessibility since build78. After initial adapter setup, connecting a chat source automatically follows its usage without a separate usage-account confirmation. Settings provide supplementary acquisition and setup; unavailable identity clears previous values rather than falling back to another channel.
+
+Since **1.1.8/build78**, and unchanged in the current build, one sending flow is used for Desktop, Web and CLI. Physical **Control+Option+E** immediately pins the user-selected application, window and input. Translation completes, then one paste and optional Return are dispatched. No semantic quality review, draft/receipt inspection, footer layout or reply/usage discovery gates sending. System translation remains the default and cloud failures use local fallback with the same send preference. Dispatch is reported as dispatched, without claiming confirmed receipt or retrying paste. See the [build74 record](docs/testing/manual-input-direct-send-2026-10-08.md); all previous versions, failures and pending live acceptance remain documented.
+
+build75 adds English, Traditional Chinese and Simplified Chinese interface-label recognition for reply capture. Missing or invalid Web usage setup is reported explicitly; Its manual Web-adapter workflow is superseded by native build78. See the [localized-reader and Web usage record](docs/testing/localized-reader-web-usage-2026-10-08.md).
+
+build76 additionally recognizes the official Web Code homepage and session routes so switching from Chat to Code does not terminate polling. See the [Web Code verification record](docs/testing/web-code-navigation-2026-10-08.md).
+
+build78 reads the selected Claude Web Settings → Usage through existing macOS accessibility permission. No userscript, browser extension or local Web service is installed or packaged. The same scoped account menu is verified before and after reading; only masked identity and a hash are retained, and the original page is restored. Automatic quota reads require the selected browser window to be foreground; explicit reads may activate it. Background values remain a last-verified snapshot. For a first read, Settings also provides “Open official Usage” and “Read open Usage”; the reader checks the window’s visible tab, not hidden tabs. See the [native reader acceptance](docs/testing/native-web-usage-2026-10-08.md).
+
+The build77 component workflow was withdrawn at the user's request. Its source, tests, commit and incomplete live acceptance remain historical; it is excluded from the production app.
+
 ## Features
 
 - **Bidirectional translation:** Chinese to the selected language, completed foreign-language replies back to Chinese. macOS system translation is the default and requires no API key. Installed language packs are reused.
+- **Gemini translation:** Choose Google's native API with Gemini 3.1 Flash-Lite pinned by default. Outgoing and incoming translations share the selected configuration, with a bidirectional connection check and a separate Keychain credential.
+- **Automatic fallback:** If Gemini or another cloud translator fails, system translation keeps the original fill/send choices without an extra review step for changing services. Translation-only requests still only display text.
 - **One-page chat:** Enter submits; Shift+Enter inserts a newline. Enter used to confirm Chinese input-method composition does not submit. Translate only, insert and review, or opt into automatic sending.
 - **Continuous reading:** Connecting starts monitoring. Messages entered in the companion or directly in Claude can produce translated replies. Original text appears before Chinese; tool activity and interface controls are excluded from formal replies.
 - **Background operation:** Keep working in another app while reading continues. Closing the companion window hides it; stopping reading or quitting ends monitoring. Keep the connected Claude conversation window open.
 - **Conversation following and history:** Reading follows conversation changes in the same connected window. Reconnect the composer before sending to another conversation. Select from visible, completed historical replies for on-demand translation.
 - **Long-response reading:** New translations open at the beginning, with scrolling and expandable originals. Chinese text sizes are 12, 14, and 16; default 14. Language and text-size preferences persist.
 - **Temporary history:** Keep the latest ten completed reply translations during this run; clear on exit. Clearing records preserves drafts, the Claude conversation, and monitoring.
-- **Account usage:** Progress bars, used percentages, and reset times for reported five-hour and weekly limits. Refresh when replies are acquired. Use the desktop login or a specified session; missing data is not shown as zero.
+- **Account usage:** Connecting a chat automatically follows its Desktop, Web, or CLI source. Show reported five-hour/weekly percentages and reset times; Web settings offer explicit native reads; automatic Web reads require its selected window to remain foreground. Missing data is not zero, and a repeated CLI report does not imply a fresh server query.
+- **Table translation:** Ordinary tables retain rows, columns and values, with horizontal scrolling and Markdown copy. Gemini uses bounded nearby text to disambiguate cell wording while remaining translation-only. Complex merged tables have not been verified.
+- **Code segments:** A finished paragraph followed by a new one starts translating immediately; the still-growing tail translates after about three seconds without changes, before another tool event or overall completion. A stable continuation updates its existing segment. Tool progress and output are excluded. Each segment counts toward the ten recent translation records.
 - **Native appearance:** A pig-head menu icon with a capital A, translucent materials following system appearance, and compact controls.
 
 ## Requirements and scope
@@ -31,8 +60,8 @@ This is an independent community project, not an Anthropic or official Claude pr
 | --- | --- |
 | Hardware | Apple Silicon Mac; current build script targets arm64 |
 | macOS | Minimum deployment target 15; mainly tested on 26 |
-| Chat clients | Claude Desktop and claude.ai in Chrome |
-| Translation | macOS system translation; optional configured OpenAI-compatible service |
+| Chat clients | Claude Desktop (Chat and Code modes) and claude.ai in Chrome |
+| Translation | macOS system translation; Google Gemini; configured OpenAI-compatible service |
 | Permissions | Accessibility for insertion and reading; possible Keychain authorization for desktop usage |
 | Chinese input | Up to 10,000 characters, including punctuation and line breaks |
 | Foreign text | Outgoing translations and incoming originals each up to 50,000 characters, not words |
@@ -63,6 +92,16 @@ Releases currently provide source, not a universal Apple Developer ID notarized 
 
 Permission changes are detected without restarting. Normal updates using the same local signing identity can retain authorization; a new computer, changed identity, or revoked permission may require authorization again.
 
+For Claude Code, press physical **Control+Option+E** in the input you want to use. Suggestions, report timing, terminal brands and footer layouts do not gate that manual input binding. Reply and usage acquisition runs independently; only an exact identity on the chosen surface associates its read source. **Connect CLI** supplements setup and report refresh without replacing the selected sending position.
+
+After binding, submit Chinese in the companion to paste the translation into the chosen input. **Send after filling** dispatches Return for single-line, multiline, table and collapsed-display content alike; when disabled, only paste is dispatched. No semantic review, suggestion inspection or receipt polling occurs, and paste is never retried automatically. Stopping reading or receiving changed/late reports does not disconnect the sender. A vanished window/input component requires another physical binding. Operational prompts remain separate from assistant replies. Actual focus restoration across browser and terminal combinations requires separate live acceptance.
+
+## Configure Gemini
+
+Open Translation Settings at the top right, choose Gemini, keep `gemini-3.1-flash-lite`, enable the key-update checkbox, and enter your Google AI Studio API key in the masked field. Test Connection checks Chinese-to-English and English-to-Chinese before saving. It sends only two fixed synthetic sentences, does not read the conversation, and does not save an unsubmitted key. Saved provider/model preferences and the Keychain key survive restarts and normal updates.
+
+Gemini calls Google's native `generateContent` endpoint directly, without an OpenAI-compatible base URL. `gemini-flash-latest` is a moving Flash alias and does not pin Flash-Lite. The model has a limited free tier; actual limits depend on the project. Billing-enabled projects may incur charges, and free-tier content may be used to improve Google products. See [Gemini setup and corrected request example](docs/GEMINI_SETUP.md).
+
 ## Updates and history
 
 ```bash
@@ -76,7 +115,7 @@ Installation validates the existing identity. Failed builds or identity mismatch
 
 ## Data and privacy
 
-Default system translation requires no translation API key; initial language-pack downloads may need a network connection. Optional AI translation sends Chinese drafts and foreign replies to your configured provider, under that provider's pricing and data policies.
+Default system translation requires no translation API key; initial language-pack downloads may need a network connection. Gemini sends Chinese drafts and foreign replies directly to Google. Optional compatible AI translation sends them to your configured provider. The selected provider's pricing and data policies apply.
 
 Chat history is not written to disk. Supplied sessions and translation keys live in macOS Keychain. Usage requests are read-only, send session credentials only to the Claude domain, and do not send chat messages. Connect the correct usage account when browser and desktop logins differ.
 
@@ -98,10 +137,14 @@ python3 Tools/check_repository.py --history
 
 GitHub CI performs repository checks, offline regressions, loopback HTTP tests, and certificate-free builds. CodeQL analyzes Swift, Python, and Actions workflows. It does not sign into Claude, send real messages, or install language packs. Language, identity, and actual Claude tests run separately; see [Contributing](CONTRIBUTING.md) and [Verification records](TEST_PLAN.md).
 
-The current app has 157 regression checks plus seven loopback HTTP checks. Native validation covers continuous replies, slow responses, background reading, history selection, stop/resume, preferences, and replies approaching 50,000 characters. Untested browser/OS combinations are not presented as verified.
+Build70 passed 34 offline groups, including 49 CLI input and 30 routing checks, plus 23 targeted Python checks. Build69's 19 loopback HTTP checks remain historical evidence rather than fresh build70 results. Historical native validation covers continuous replies, slow responses, background reading, history selection, stop/resume, preferences, and replies approaching 50,000 characters, with each result tied to its tested version. Actual Google calls, Desktop Code mode, and the experimental CLI adapter are recorded separately. Untested browser, terminal, and OS combinations are not presented as verified.
+
+Build41 removes injected line breaks around inline files, links and emphasis, and handles provider-added line breaks in the shared system/AI translation path while preserving genuine paragraphs, code, lists and table structure. See the [paragraph-layout record](docs/testing/paragraph-layout-2026-10-06.md) for simulations and native UI checks. Earlier Code tests demonstrated an early Chinese stage, but also recorded untranslated stages, table-semantic failures and an exceeded test budget; they do not establish full live acceptance. See the [2026-10-06 supplement report](docs/testing/real-code-supplement-results-2026-10-06.md).
 
 ## Community and license
 
 [Report issues](https://github.com/fisher-admin/a-chu-companion/issues/new/choose), propose improvements, or submit pull requests. Read [Contributing](CONTRIBUTING.md), [Code of Conduct](CODE_OF_CONDUCT.md), and [Support](SUPPORT.md).
 
 Licensed under the [MIT License](LICENSE). Anthropic, Claude, Apple, and other trademarks belong to their respective owners; the project license grants no rights to third-party trademarks.
+
+CLI operational notices use local system translation independently of the selected cloud provider. Command details remain verbatim and are not uploaded for translation. Notices do not count toward the ten formal reply records.

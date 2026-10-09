@@ -5,6 +5,7 @@ import WebKit
     var window: NSWindow!
     var web: WKWebView!
     private var conversation = 0
+    private let codeMode = CommandLine.arguments.contains("--code") || Bundle.main.object(forInfoDictionaryKey: "ACHUFixtureMode") as? String == "code"
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular); AppMenus.install()
         window = NSWindow(contentRect: NSRect(x: 80, y: 150, width: 720, height: 600), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -18,9 +19,10 @@ import WebKit
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     private func loadConversation() {
-        let htmlPath = Bundle.main.path(forResource: "fixture", ofType: "html")!
+        let htmlPath = Bundle.main.path(forResource: codeMode ? "code-fixture" : "fixture", ofType: "html")!
         let html = try! String(contentsOfFile: htmlPath, encoding: .utf8)
-        web.loadHTMLString(html, baseURL: URL(string: "https://claude.ai/chat/achu-local-fixture-\(conversation)"))
+        let route = codeMode ? "epitaxy" : "chat"
+        web.loadHTMLString(html, baseURL: URL(string: "https://claude.ai/\(route)/achu-local-fixture-\(conversation)"))
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if let command = message.body as? [String: String], command["command"] == "switchConversation" {

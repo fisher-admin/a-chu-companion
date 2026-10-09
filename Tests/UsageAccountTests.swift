@@ -1,0 +1,96 @@
+import Foundation
+
+@main struct UsageAccountTests {
+    @MainActor static func main() async throws {
+        let name = "achu-account-test-" + UUID().uuidString
+        let prefs = UserDefaults(suiteName: name)!
+        defer { prefs.removePersistentDomain(forName: name) }
+        let monitor = ClaudeUsageMonitor(settings: prefs, load: { _, _ in preconditionFailure("Visible source must not load old credentials") }, enabled: { false })
+        let unknown = try UsageEvidence.statusLine(Data(#"{"rate_limits":{"seven_day":{"used_percentage":25}}}"#.utf8), binding: "cli-fixture")
+        monitor.receive(unknown)
+        var rejected = false
+        do { try monitor.migrateVisible(account: "Manual label") } catch { rejected = true }
+        precondition(rejected && monitor.snapshot == nil, "A manual account label cannot certify the current account or publish its quota")
+        print("PASS: unverified quota cannot be connected by a manual account label")
+        func evidence(_ source: UsageEvidenceSource = .statusLine, binding: String = "cli-fixture", account: String = "a", epoch: String = "first", sequence: Int = 1, percent: Double = 25) -> UsageEvidence {
+            .init(source: source, binding: binding, snapshot: .init(fiveHour: nil, sevenDay: .init(usedPercentage: percent, resetsAt: nil), observedAt: Date()),
+                  identity: .init(fingerprint: String(repeating: account, count: 64), displayName: "账户 " + account.uppercased()), epoch: epoch, sequence: sequence)
+        }
+        let first = evidence()
+        monitor.receive(first); try monitor.migrateVisible(account: "My label", evidence: first)
+        precondition(monitor.channel == .cli && monitor.accountDisplayName == "账户 A" && monitor.snapshot?.sevenDay?.usedPercentage == 25)
+        let second = evidence(account: "b", epoch: "second", sequence: 1, percent: 75)
+        monitor.receive(second)
+        precondition(monitor.accountDisplayName == "账户 B" && monitor.snapshot?.sevenDay?.usedPercentage == 75)
+        monitor.receive(evidence(sequence: 900, percent: 99))
+        precondition(monitor.snapshot?.sevenDay?.usedPercentage == 75 && monitor.accountDisplayName == "账户 B")
+        print("PASS: account switch replaces the quota and an old generation cannot restore it")
+        monitor.receive(evidence(account: "a", epoch: "second", sequence: 2, percent: 10))
+        // An actual switch back in the same generation retires B, so its late report is rejected.
+        monitor.receive(evidence(account: "b", epoch: "second", sequence: 3, percent: 99))
+        precondition(monitor.snapshot?.sevenDay?.usedPercentage == 10)
+        print("PASS: a retired account fingerprint cannot return in the same generation")
+        monitor.receiveAccount(.init(source: .statusLine, binding: "cli-fixture", epoch: "second", sequence: 4, identity: nil))
+        precondition(monitor.snapshot == nil && monitor.accountDisplayName == "账户待核对")
+        monitor.receive(evidence(account: "a", epoch: "second", sequence: 5, percent: 12))
+        precondition(monitor.snapshot?.sevenDay?.usedPercentage == 12)
+        print("PASS: missing current identity clears quota until that account is verified again")
+        monitor.receive(evidence(.usagePage, binding: "web-fixture", account: "c", percent: 34))
+        precondition(monitor.snapshot?.sevenDay?.usedPercentage == 12)
+        precondition(monitor.candidates(for: .web).count == 1 && monitor.candidates(for: .cli).count == 1 && monitor.candidates(for: .desktop).isEmpty)
+        print("PASS: three channel candidates are isolated and another source does not change the active quota")
+        do { try monitor.migrateVisible(account: "Old choice", evidence: first); fatalError("obsolete evidence") } catch {}
+        precondition(monitor.snapshot?.sevenDay?.usedPercentage == 12)
+        let restored = ClaudeUsageMonitor(settings: prefs, load: { _, _ in preconditionFailure("No fallback") }, enabled: { false })
+        precondition(restored.snapshot == nil && restored.accountDisplayName == "账户待核对")
+        restored.receive(evidence(account: "c", epoch: "new-running-session", percent: 44))
+        precondition(restored.snapshot?.sevenDay?.usedPercentage == 44 && restored.accountDisplayName == "账户 C")
+        print("PASS: restart rechecks the current account and stale candidate selection cannot reconnect an old quota")
+        prefs.set(Data(#"{"source":"statusLine","account":"Old alias","binding":"cli-fixture"}"#.utf8), forKey: "visibleUsageConnection")
+        let legacy = ClaudeUsageMonitor(settings: prefs, load: { _, _ in preconditionFailure("No fallback") }, enabled: { false })
+        legacy.receive(unknown)
+        precondition(legacy.source == .statusLine && legacy.accountLabel == "Old alias" && legacy.snapshot == nil)
+        print("PASS: legacy settings retain their alias without pretending the account is verified")
+        for index in 0..<12 { monitor.receive(evidence(.usagePage, binding: "web-\(index)", account: "d")) }
+        precondition(monitor.candidates.count == 8)
+        print("PASS: visible candidate storage is bounded")
+        monitor.receiveAccount(.init(source: .statusLine, binding: "cli-fixture", epoch: "second", sequence: 6, identity: .init(fingerprint: String(repeating: "a", count: 64), displayName: "账户 A")))
+        precondition(monitor.snapshot == nil && monitor.accountDisplayName == "账户 A")
+        print("PASS: an identity-only report does not keep a missing quota window alive")
+        monitor.stop(); restored.stop(); legacy.stop()
+        let auto = ClaudeUsageMonitor(settings: prefs, enabled: { false })
+        auto.follow(channel: .web, binding: "web-auto")
+        auto.receive(evidence(.statusLine, binding: "cli-other", percent: 92))
+        precondition(auto.snapshot == nil, "Auto connection must not adopt another channel")
+        auto.receive(evidence(.usagePage, binding: "web-other", percent: 81))
+        precondition(auto.snapshot == nil, "Auto connection must match the actual chat binding")
+        auto.receive(evidence(.usagePage, binding: "web-auto", epoch: "auto", percent: 37))
+        precondition(auto.channel == .web && auto.snapshot?.sevenDay?.usedPercentage == 37)
+        auto.follow(channel: .cli, binding: "cli-auto")
+        precondition(auto.snapshot == nil && auto.channel == .cli)
+        auto.receive(evidence(.usagePage, binding: "web-auto", epoch: "auto", sequence: 2, percent: 40))
+        precondition(auto.snapshot == nil)
+        auto.receive(evidence(.statusLine, binding: "cli-auto", epoch: "auto-cli", percent: 48))
+        precondition(auto.snapshot?.sevenDay?.usedPercentage == 48)
+        auto.stopFollowing()
+        precondition(auto.snapshot == nil)
+        auto.receive(evidence(.statusLine, binding: "cli-auto", epoch: "auto-cli", sequence: 2, percent: 49))
+        precondition(auto.snapshot == nil)
+        print("PASS: chat connection automatically follows only its verified source, and disconnection clears quota")
+        auto.requestReport = { _, _, _ in }
+        auto.acquire(.web, binding: "web-auto")
+        await Task.yield()
+        auto.receive(evidence(.usagePage, binding: "web-other", sequence: 2))
+        precondition(auto.acquiring, "Another tab cannot satisfy the acquisition")
+        auto.receive(evidence(.usagePage, binding: "web-auto", epoch: "auto", sequence: 1))
+        precondition(auto.acquiring, "A cached old capture cannot satisfy a new acquisition")
+        auto.receive(evidence(.usagePage, binding: "web-auto", epoch: "auto", sequence: 3))
+        precondition(!auto.acquiring)
+        print("PASS: acquisition requires a newer report from the requested binding")
+        auto.acquire(.cli, binding: "cli-auto")
+        auto.stop()
+        precondition(!auto.acquiring, "Stopping must cancel pending quota acquisition")
+        print("PASS: stopping cancels pending acquisition")
+        print("12 usage account contracts passed")
+    }
+}

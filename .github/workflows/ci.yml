@@ -25,12 +25,22 @@ jobs:
           persist-credentials: false
       - name: Verify repository tooling
         run: python3 -m unittest discover -s Tests -p RepositoryChecksTests.py
+      - name: Read-only bridge protocol and temporary installation checks
+        run: |
+          python3 -m unittest discover -s Tests -p BridgeTests.py
+          python3 -m unittest discover -s Tests -p CLIDeliveryOriginTests.py
+          node --test Tests/BridgeChromeTests.cjs Tests/BridgeWorkerTests.cjs
+      - name: Managed Web quota transport and module simulations
+        run: |
+          python3 Tests/ManagedWebUsageTests.py
+          node Tests/ManagedWebModuleTests.cjs
+          node Tests/ManagedWebIntegrationTests.cjs
       - name: Validate documentation and audit history
         run: python3 Tools/check_repository.py --history
   macos:
     name: macOS tests and build
     runs-on: macos-26
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -44,6 +54,8 @@ jobs:
         run: ./test.sh
       - name: Local HTTP integration checks
         run: ./test-http.sh
+      - name: Local socket integration checks
+        run: ./test-bridge.sh
       - name: Build without local credentials or signing identity
         env:
           ACHU_SIGNING_CONFIG: /tmp/achu-ci-no-signing-config.json
@@ -53,5 +65,8 @@ jobs:
           app="dist/unsigned/A畜伴侣.app"
           plutil -lint "$app/Contents/Info.plist"
           test -s "$app/Contents/Resources/AChuCompanion.icns"
+          test -s "$app/Contents/Resources/Bridge/bridge.py"
+          test ! -e "$app/Contents/Resources/Bridge/web"
+          test ! -e "$app/Contents/Resources/Bridge/chrome"
           file "$app/Contents/MacOS/AChuCompanion"
           test ! -e "dist/A畜伴侣.app"

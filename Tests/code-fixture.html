@@ -1,0 +1,18 @@
+<!doctype html><meta charset="utf-8"><title>Claude Code local fixture</title>
+<style>body{font:16px -apple-system;margin:28px;background:#faf9f6}h1{font-size:21px}#messages{height:330px;overflow:auto;border:1px solid #ddd;padding:12px}h2{font-size:12px;color:#777}textarea{width:100%;box-sizing:border-box;height:90px;font:16px -apple-system}button{padding:5px 10px}</style>
+<h1>A畜伴侣 Code 模式测试</h1><p>仅本机：稳定正文先翻译、工具提示排除、36 秒运行等待、连续回复。</p>
+<p role="status" id="stage">Claude finished the response</p><button id="stop" hidden>Stop</button>
+<div role="group" aria-label="Chat messages"><div id="messages"></div></div>
+<textarea id="input" aria-label="Prompt" placeholder="点击后连接伴侣"></textarea>
+<p><button id="send">生成慢回复</button> <button id="switch">切换测试会话</button> <span id="count">已完成 0 条</span></p>
+<script>
+const input=document.getElementById('input'),messages=document.getElementById('messages'),stage=document.getElementById('stage'),stop=document.getElementById('stop');let ordinal=0,count=0,sent=[];
+function record(){window.webkit.messageHandlers.fixture.postMessage({messages:sent,assistantCount:count,input:input.value})}
+function marker(author,text){const item=document.createElement('div');item.setAttribute('role','group');item.setAttribute('aria-label',`Message ${++ordinal}`);const inner=document.createElement('div');inner.setAttribute('role','group');const heading=document.createElement('h2');heading.textContent=author+': '+text;inner.append(heading);item.append(inner);messages.append(item);return inner}
+function paragraph(text){const p=document.createElement('p');p.textContent=text;return p}
+function tool(){const group=document.createElement('div');group.setAttribute('role','group');group.setAttribute('aria-label','Ran 2 commands');const button=document.createElement('button');button.textContent='Ran 2 commands';group.append(paragraph('Ran 2 commands'),button,paragraph('PRIVATE TOOL OUTPUT'));return group}
+function finalActions(){const toolbar=document.createElement('div');toolbar.setAttribute('role','toolbar');toolbar.setAttribute('aria-label','Message actions');for(const label of ['Copy','Fork from here']){const b=document.createElement('button');b.textContent=label;toolbar.append(b)}return toolbar}
+function send(){if(!input.value.trim()||!stop.hidden)return;sent.push(input.value);marker('You said',input.value).append(paragraph(input.value));input.value='';stage.textContent='Claude is working';stop.hidden=false;const head=marker('Claude responded','');head.append(tool(),paragraph('Ran 2 commands'));messages.append(paragraph('Starting the local checks.'));record();setTimeout(()=>{messages.append(tool(),paragraph('Ran 2 commands'));setTimeout(()=>{const final=document.createElement('div');final.setAttribute('role','group');final.append(paragraph(`All checks passed. Reply number: ${count+1}.`));const code=document.createElement('div');code.setAttribute('role','group');code.setAttribute('aria-label','Code');const copy=document.createElement('button');copy.textContent='Copy code';const pre=document.createElement('pre');pre.textContent='print("COMPLETE-CODE-END")';code.append(copy,pre);final.append(code,paragraph('The complete ending is preserved.'),finalActions());messages.append(final);stage.textContent='Claude finished the response';stop.hidden=true;count++;document.getElementById('count').textContent=`已完成 ${count} 条`;messages.scrollTop=messages.scrollHeight;record()},18000)},18000)}
+input.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}};
+document.getElementById('send').onclick=send;document.getElementById('switch').onclick=()=>window.webkit.messageHandlers.fixture.postMessage({command:'switchConversation'});input.oninput=record;record();input.focus();
+</script>
