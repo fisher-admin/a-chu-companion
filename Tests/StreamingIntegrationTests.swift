@@ -28,6 +28,10 @@ import AppKit
         try await escalation()
         safety()
         try await memory()
+        try await thinkingWait()
+        try await lateRevision()
+        quotes()
+        try await longStages()
         print("\(passed) streaming integration contracts passed")
     }
 
@@ -188,9 +192,107 @@ import AppKit
         _ = ledger.shouldEnable(pid: 10, flag: "AXManualAccessibility", currentlyOn: false)
         check(ledger.release(pid: 10) == ["AXEnhancedUserInterface", "AXManualAccessibility"] && ledger.release(pid: 10).isEmpty, "disconnecting switches off exactly the flags the companion enabled, once")
         check(ledger.release(pid: 11).isEmpty && ledger.processes.isEmpty, "apps the companion did not change are untouched")
-        var retired = RetiredIDs(limit: 3)
-        retired.formUnion(["a", "b", "c", "d", "e"])
-        check(retired.count == 3 && !retired.contains("a") && retired.contains("e"), "retired identities keep only the newest within a fixed bound")
+        let chat = ReplyIdentity.id(conversation: "https://claude.ai/chat/a", ordinal: 7)
+        let stage = { (segment: Int) in ReplyIdentity.id(conversation: "https://claude.ai/code/a", ordinal: 2, segment: segment) }
+        var retired = RetiredIDs(conversationLimit: 2, ordinalWindow: 128, otherLimit: 2)
+        retired.formUnion([chat] + (1...600).map(stage))
+        check(retired.contains(chat) && (1...600).allSatisfy { retired.contains(stage($0)) } && retired.storedRanges == 2,
+              "600 retired segments of one message are all remembered as one compressed range")
+        retired.remove(stage(300))
+        check(!retired.contains(stage(300)) && retired.contains(stage(299)) && retired.contains(stage(301)), "an explicit history selection un-retires exactly one segment")
+        retired.formUnion([ReplyIdentity.id(conversation: "https://claude.ai/chat/a", ordinal: 400)])
+        check(!retired.contains(chat), "message numbers far below the tracked window are dropped")
+        retired.formUnion([ReplyIdentity.id(conversation: "https://claude.ai/chat/c", ordinal: 1)])
+        check(!retired.contains(stage(1)), "only the most recent conversations are kept")
+        retired.formUnion(["draft-1", "draft-2", "draft-3"])
+        check(!retired.contains("draft-1") && retired.contains("draft-3"), "non-reply identities keep a fixed-size window")
+    }
+
+    /// Review issue 1: a blank thinking card from the real decoder is a normal wait.
+    @MainActor static func thinkingWait() async throws {
+        let thinking = ReplyNode(role: "AXGroup", label: "Message 4 of 4", children: [
+            .init(role: "AXGroup", children: [.init(role: "AXHeading", label: "Claude responded:"), .init(role: "AXStaticText", text: "")])
+        ])
+        let monitor = ReplyMonitor(); var now: TimeInterval = 0
+        monitor.clock = { now }; monitor.watching = true
+        var structuralSeen = false
+        for second in 0...120 {
+            now = TimeInterval(second)
+            do { _ = try ClaudeDecoder.recentMessages([thinking]); check(false, "a thinking card must not decode") }
+            catch { structuralSeen = structuralSeen || (error as? ReplyReadPending)?.structural == true; monitor.handleReadFailure(error) }
+        }
+        check(!structuralSeen && monitor.readError == nil && monitor.readRetrySeconds == 1 && monitor.watching,
+              "a lone thinking card with its author marker waits two minutes without an interface warning")
+        let relabelled = ReplyNode(role: "AXGroup", label: "Message 4 of 4", children: [
+            .init(role: "AXGroup", children: [.init(role: "AXHeading", label: "Claude a répondu :"), .init(role: "AXStaticText", text: "Réponse")])
+        ])
+        do { _ = try ClaudeDecoder.recentMessages([relabelled]); check(false, "unknown labels must not decode") }
+        catch { check((error as? ReplyReadPending)?.structural == true, "a card without any recognised author marker is still a structural failure") }
+        monitor.stop()
+    }
+
+    /// A slice whose translation already started is revised; its late result is discarded.
+    @MainActor static func lateRevision() async throws {
+        var gates: [String: CheckedContinuation<String, Never>] = [:]
+        var published: [String] = []
+        let pipeline = ReplyPipeline(concurrency: 2) { text in await withCheckedContinuation { gates[text] = $0 } }
+        pipeline.onTranslation = { _, _, value, _ in published.append(value) }
+        pipeline.observe(conversation: "late", messages: [.init(ordinal: 2, author: .assistant, text: "Alpha stage is complete.\n\nTail")], responseComplete: false, now: 0)
+        try await settle { gates["Alpha stage is complete."] != nil }
+        pipeline.observe(conversation: "late", messages: [.init(ordinal: 2, author: .assistant, text: "Alpha stage was revised.\n\nTail")], responseComplete: false, now: 1)
+        try await settle { gates["Alpha stage was revised."] != nil }
+        gates.removeValue(forKey: "Alpha stage is complete.")?.resume(returning: "OLD")
+        try await Task.sleep(for: .milliseconds(30))
+        gates.removeValue(forKey: "Alpha stage was revised.")?.resume(returning: "NEW")
+        try await settle { published.contains { $0.hasPrefix("NEW") } }
+        check(!published.contains { $0.contains("OLD") } && published.last?.hasPrefix("NEW") == true,
+              "a stale result that arrives after its slice was revised is never published")
+        pipeline.tick(now: 10)
+        try await settle { gates["Tail"] != nil }
+        gates.removeValue(forKey: "Tail")?.resume(returning: "T")
+        try await settle { !pipeline.busy }
+        check(!pipeline.busy, "the superseded request does not keep a concurrency slot")
+    }
+
+    /// Review issue 3: quotation is semantic across languages.
+    static func quotes() {
+        func clean(_ output: String, _ source: String) -> String? { try? TranslationCleanup.normalize(output, source: source) }
+        check(clean("“你好。”", "\"Hello.\"") == "“你好。”", "straight source quotes keep Chinese curved quotes")
+        check(clean("「こんにちは。」", "\"Hello.\"") == "「こんにちは。」", "straight source quotes keep Japanese corner quotes")
+        check(clean("『引用』", "“Quote”") == "『引用』", "curved source quotes keep Japanese double corner quotes")
+        check(clean("“你好。”", "'Hello.'") == "“你好。”", "single-quoted sources keep their translated quotation")
+        check(clean("\"Hallo.\"", "「你好。」") == "\"Hallo.\"", "corner-quoted Chinese keeps translated straight quotes")
+        check(clean("“你好。”", "Hello.") == "你好。", "quotes added around an unquoted source are still removed")
+        check(clean("“A”或“B”", "Use A or B") == "“A”或“B”", "two separate quotations are never mistaken for a wrapper")
+        check(clean("'tis done'", "It is done") == "'tis done'", "apostrophes are never stripped as quotes")
+    }
+
+    /// Review issue 2: re-reading one Code reply with 600 segments changes nothing.
+    @MainActor static func longStages() async throws {
+        let model = TranslatorModel(permissionCheck: { true }, remoteKeyRead: { _ in "" })
+        defer { model.replies.stop(); model.stopPermissionMonitoring() }
+        var requests = 0
+        model.replies.testTranslation = { text in requests += 1; return "中文:" + text }
+        model.replies.watching = true
+        let messages: [ChatMessage] = (1...600).map {
+            .init(ordinal: 2, author: .assistant, text: "Finished research stage \($0).", segment: $0, completed: true)
+        }
+        let snapshot = ReplySnapshot(conversation: "https://claude.ai/code/review-large-stages", messages: messages, foundTranscript: true, responseComplete: true)
+        func settled() -> Bool { !model.replies.translating && model.history.filter { !$0.isUser && !$0.chinese.isEmpty }.count == 10 }
+        model.replies.ingest(snapshot, now: 0)
+        try await settle(15) { settled() }
+        let firstRequests = requests, firstRevision = model.chatRevision, firstIDs = model.history.map(\.id)
+        check(model.history.last?.foreign == "Finished research stage 600." && model.history.first?.foreign == "Finished research stage 591.",
+              "the first read of 600 segments shows the latest ten")
+        for pass in 1...3 {
+            model.replies.ingest(snapshot, now: TimeInterval(pass * 5))
+            try await Task.sleep(for: .milliseconds(100))
+            try await settle(15) { settled() }
+        }
+        check(requests == firstRequests, "re-reading the identical 600-segment reply sends no further requests (\(requests - firstRequests) extra)")
+        check(model.history.map(\.id) == firstIDs, "the latest ten segments are not replaced by older ones")
+        check(model.chatRevision == firstRevision, "re-reading causes no scroll updates (\(model.chatRevision - firstRevision) extra)")
+        check(model.replies.pipelineRecordCount <= 10, "the pipeline still holds at most the visible window")
     }
 
     @MainActor static func memory() async throws {

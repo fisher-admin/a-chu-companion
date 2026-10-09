@@ -2,9 +2,33 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json, sys, time
 class Handler(BaseHTTPRequestHandler):
     recovery_calls = 0
+    auth_counts = {}
     def log_message(self, *args): pass
+    def do_GET(self):
+        # Request counts for /auth/... so tests can prove which calls reached the network.
+        self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers()
+        self.wfile.write(json.dumps(Handler.auth_counts).encode())
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        if self.path.startswith('/auth/'):
+            # /auth/<tag>/<status>: synthetic keys containing "accepted-" succeed; others get <status>.
+            gemini = self.path.startswith('/auth/gemini/')
+            credential = self.headers.get('X-goog-api-key' if gemini else 'Authorization', '')
+            accepted = 'accepted-' in credential
+            key = self.path + ('#accepted' if accepted else '#rejected')
+            Handler.auth_counts[key] = Handler.auth_counts.get(key, 0) + 1
+            if not accepted:
+                status = next(int(part) for part in self.path.split('/') if part.isdigit())
+                self.send_response(status); self.end_headers()
+                self.wfile.write(b'{"error":{"message":"Synthetic authorization rejection"}}'); return
+            if gemini:
+                payload = {'candidates':[{'content':{'parts':[{'text':'Hello'}]},'finishReason':'STOP'}]}
+            else:
+                messages = body.get('messages') or []
+                content = '已译:' + messages[-1]['content'] if messages else 'Hello'
+                payload = {'choices':[{'message':{'content':content},'finish_reason':'stop'}]}
+            self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers()
+            self.wfile.write(json.dumps(payload).encode()); return
         if self.path.startswith('/gemini/'):
             if self.headers.get('X-goog-api-key') != 'dummy-gemini-key' or self.headers.get('Authorization') or 'systemInstruction' not in body:
                 self.send_response(400); self.end_headers(); return

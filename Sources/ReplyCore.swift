@@ -592,6 +592,17 @@ enum ClaudeDecoder {
         visit(root)
         return result.sorted { $0.ordinal < $1.ordinal }
     }
+    /// Whether a numbered message card carries a recognised author marker, independent
+    /// of whether its body is readable yet.
+    static func hasAuthorMarker(_ root: ReplyNode, format: ClaudeTranscriptFormat = .chat) -> Bool {
+        func visit(_ node: ReplyNode) -> Bool {
+            if let ordinal = position(node.label, format: format)?.ordinal {
+                return format == .code ? codeAuthor(node, ordinal: ordinal) != nil : headingParent(node) != nil
+            }
+            return node.children.contains(where: visit)
+        }
+        return visit(root)
+    }
     static func normalize(_ value: String) -> String { value.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
     static func recentMessages(_ nodes: [ReplyNode], format: ClaudeTranscriptFormat = .chat) throws -> [ChatMessage] {
         guard !nodes.isEmpty else { return [] }
@@ -619,10 +630,11 @@ enum ClaudeDecoder {
             expected -= 1
         }
         guard !tail.isEmpty else {
-            // While Claude thinks only the newest card lacks a body; when no card has a
-            // recognisable author marker, the labels themselves are no longer understood.
-            let anyDecoded = nodes.contains { !messages($0, format: format).isEmpty }
-            throw ReplyReadPending(message: "最新消息的正文或作者标记尚未完整，未使用部分内容。", structural: !anyDecoded)
+            // A card whose author marker is recognised but whose body is still empty is
+            // Claude thinking: a normal wait. Only when no card carries a recognisable
+            // author marker are the labels themselves no longer understood.
+            let markerFound = nodes.contains { hasAuthorMarker($0, format: format) }
+            throw ReplyReadPending(message: "最新消息的正文或作者标记尚未完整，未使用部分内容。", structural: !markerFound)
         }
         return tail.reversed()
     }

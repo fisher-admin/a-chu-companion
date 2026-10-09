@@ -130,26 +130,72 @@ enum DeliveryPolicy {
 }
 
 /// Retired reply identities keep a reply that is still visible in Claude from being
-/// re-added after the ten-item window evicted it. Only the newest identities matter:
-/// older replies fall outside the tracked range, so the oldest beyond the cap are
-/// dropped and long sessions use bounded memory.
+/// re-added after the ten-item window evicted it. Identities are scoped by conversation,
+/// message and segment: one Code reply may hold hundreds of segments under a single
+/// message number, so a fixed-count queue would forget segments that are still on
+/// screen. Segments compress into ranges; memory stays bounded by keeping the most
+/// recent conversations and, within each, message numbers inside a window wider than
+/// the pipeline's own tracking range (newest - 128).
 struct RetiredIDs {
-    private var order: [String] = []
-    private var members: Set<String> = []
-    let limit: Int
-    init(limit: Int = 512) { self.limit = max(1, limit) }
-    var count: Int { members.count }
-    var all: Set<String> { members }
-    func contains(_ id: String) -> Bool { members.contains(id) }
+    private struct Reply { let conversation: String; let ordinal: Int; let segment: Int }
+    private var conversations: [String: [Int: IndexSet]] = [:]
+    private var recency: [String] = []
+    private var other: [String] = []
+    private var otherSet: Set<String> = []
+    let conversationLimit: Int, ordinalWindow: Int, otherLimit: Int
+    init(conversationLimit: Int = 16, ordinalWindow: Int = 256, otherLimit: Int = 512) {
+        self.conversationLimit = max(1, conversationLimit); self.ordinalWindow = max(128, ordinalWindow); self.otherLimit = max(1, otherLimit)
+    }
+    /// `<conversation digest>:<ordinal>[:part:<segment>]` from ReplyIdentity.
+    private static func parse(_ id: String) -> Reply? {
+        let fields = id.split(separator: ":", omittingEmptySubsequences: false)
+        guard fields.count == 2 || (fields.count == 4 && fields[2] == "part"), !fields[0].isEmpty,
+              let ordinal = Int(fields[1]), ordinal >= 0 else { return nil }
+        let segment = fields.count == 4 ? Int(fields[3]) : 0
+        guard let segment, segment >= 0 else { return nil }
+        return Reply(conversation: String(fields[0]), ordinal: ordinal, segment: segment)
+    }
+    var count: Int { conversations.values.reduce(0) { $0 + $1.values.reduce(0) { $0 + $1.count } } + otherSet.count }
+    /// Stored ranges, not identities: the memory actually held.
+    var storedRanges: Int { conversations.values.reduce(0) { $0 + $1.values.reduce(0) { $0 + $1.rangeView.count } } + otherSet.count }
+    var all: Set<String> {
+        var ids = otherSet
+        for (conversation, ordinals) in conversations {
+            for (ordinal, segments) in ordinals {
+                for segment in segments { ids.insert(conversation + ":" + String(ordinal) + (segment > 0 ? ":part:" + String(segment) : "")) }
+            }
+        }
+        return ids
+    }
+    func contains(_ id: String) -> Bool {
+        guard let reply = Self.parse(id) else { return otherSet.contains(id) }
+        return conversations[reply.conversation]?[reply.ordinal]?.contains(reply.segment) == true
+    }
+    /// An explicit history selection un-retires exactly one segment.
     mutating func remove(_ id: String) {
-        guard members.remove(id) != nil else { return }
-        order.removeAll { $0 == id }
+        guard let reply = Self.parse(id) else {
+            if otherSet.remove(id) != nil { other.removeAll { $0 == id } }
+            return
+        }
+        conversations[reply.conversation]?[reply.ordinal]?.remove(reply.segment)
+        if conversations[reply.conversation]?[reply.ordinal]?.isEmpty == true { conversations[reply.conversation]?[reply.ordinal] = nil }
     }
     mutating func formUnion<S: Sequence>(_ ids: S) where S.Element == String {
-        for id in ids where members.insert(id).inserted { order.append(id) }
-        if order.count > limit {
-            let dropped = order.prefix(order.count - limit)
-            members.subtract(dropped); order.removeFirst(dropped.count)
+        for id in ids {
+            guard let reply = Self.parse(id) else {
+                if otherSet.insert(id).inserted { other.append(id) }
+                continue
+            }
+            conversations[reply.conversation, default: [:]][reply.ordinal, default: IndexSet()].insert(reply.segment)
+            recency.removeAll { $0 == reply.conversation }; recency.append(reply.conversation)
+            if let newest = conversations[reply.conversation]?.keys.max() {
+                conversations[reply.conversation] = conversations[reply.conversation]?.filter { $0.key >= newest - ordinalWindow }
+            }
+        }
+        while recency.count > conversationLimit { conversations[recency.removeFirst()] = nil }
+        if other.count > otherLimit {
+            let dropped = other.prefix(other.count - otherLimit)
+            otherSet.subtract(dropped); other.removeFirst(dropped.count)
         }
     }
 }

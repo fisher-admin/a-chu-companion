@@ -4,6 +4,16 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.2.1 — 2026-10-08 — build 81 — 修复 build80 审核发现的三处边界问题
+
+Fixes the three P2 regressions reproduced in the [build80 review](docs/reviews/2026-10-08-build80-review.zh-CN.md). / 修复 build80 审核复现的三处问题。
+
+- A message card whose author marker is recognised but whose body is still empty (Claude thinking) is a normal wait, not a structural failure; only cards without any recognised author marker count. / 有作者标记但正文为空的思考卡片按正常等待处理，不再误报界面变化；只有所有卡片都没有可识别作者标记时才算结构异常。
+- Retired reply identities are scoped by conversation, message and segment, with segments compressed into ranges, replacing the 512-entry queue. Re-reading one Code reply with 600 segments sends no requests, keeps the latest ten and causes no scroll updates. / 已移出记录按会话、消息和分段保存并压缩为区间，取代固定 512 条队列；重复读取 600 段的同一 Code 回复不再请求、替换最新十条或滚动。
+- Quotation is preserved semantically: a quoted source keeps whatever quotation pair its translation uses (e.g. `"Hello."` → `“你好。”`, `「…」`); only a single pair wrapped around an unquoted source is removed, never two separate quotations or apostrophes. / 引号按语义保留：原文有任意成对引号时译文引号保留；只去除包在未加引号原文外的单一一对引号。
+- Tests: the review's reproductions, a stale result arriving after its slice was revised, and real-HTTP 401/403 for both providers plus three concurrent pipeline slices and a key change. / 测试新增审核复现用例、改写后迟到的旧结果，以及两种接口的真实 HTTP 401/403、三段并发和更换密钥。
+- README: build81 is the current development build; clipboard markers are described as a request that depends on each clipboard tool honouring it. / README 标明当前版本，剪贴板标记改为“表示不应保存，是否遵守取决于各工具”。
+
 ## 1.2.1 — 2026-10-08 — build 80 — 基于 build78 整合流式与降级改进
 
 Based on build78 (`e22f695`). Keeps CLI support, native Web usage, native Gemini configuration with per-service keys, table rendering, localized and Web Code reading, and per-segment records. Ports only the reviewed 1.2.0 improvements. / 以 build78 为基础，保留 CLI、原生网页额度、独立 Gemini 与按服务隔离的密钥、表格显示、中文界面与网页 Code 读取及分段记录，只迁入经审核保留的 1.2.0 改进。
@@ -13,7 +23,7 @@ Based on build78 (`e22f695`). Keeps CLI support, native Web usage, native Gemini
 - 401/403 pause the service through the shared gate like 429/5xx; later slices fall back without repeated failed requests. / 401/403 与限流一样经共用通道暂停服务，后续片段直接降级。
 - Remote output cleanup removes added preambles, wrapping fences and quotes; no language, length or semantic checks. An unpaired fence falls back for that slice. / 云端译文只清理多余说明、外包代码块与引号，不做语言、长度或语义检查；代码块标记不成对时本段降级。
 - Structural read failures lasting ~45 s raise a visible warning without stopping reading; thinking and tool runs never trigger it. / 结构性读取失败约 45 秒后提示，不停止读取；思考和工具运行不触发。
-- Insertion clipboard items carry TransientType/ConcealedType (Desktop, Web and CLI share this paste). Accessibility opt-ins the companion enabled are switched off on target change and quit. / 回填剪贴板带临时与隐藏标记（三端共用）；连接更换或退出时关闭本程序开启的辅助功能选项。
+- Insertion clipboard items carry TransientType/ConcealedType (Desktop, Web and CLI share this paste); clipboard tools decide whether to honour them. Accessibility opt-ins the companion enabled are switched off on target change and quit. / 回填剪贴板带临时与隐藏标记（三端共用）；连接更换或退出时关闭本程序开启的辅助功能选项。
 - Retired reply identities are bounded. / 已移出记录的回复标识数量有上限。
 - Fix `test-http.sh` and `test-languages.sh`, which still referenced the removed `TranslationFidelity.swift` and failed on build78. / 修复仍引用已删除文件、在 build78 中失败的两项测试脚本。
 

@@ -37,15 +37,30 @@ enum TranslationCleanup {
             value = unwrapped(value)
         }
         if fences(in: value) != sourceFences, !fences(in: value).isMultiple(of: 2) { throw UnpairedFence() }
-        for (open, close) in [("\"", "\""), ("“", "”"), ("「", "」")]
-        where value.count > 2 && value.hasPrefix(open) && value.hasSuffix(close) && !sourceStart.hasPrefix(open) {
-            value = String(value.dropFirst(open.count).dropLast(close.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            break
+        // Quotation is semantic, not a character: "Hello." correctly becomes “你好。” or
+        // 「こんにちは。」. Only quotes wrapped around an unquoted source are removed.
+        if quotedPair(sourceStart) == nil, let (open, close) = quotedPair(value), open != "'" {
+            let inner = String(value.dropFirst(open.count).dropLast(close.count))
+            // “A”或“B” starts and ends with quotes but is two quotations, not a wrapper.
+            if !inner.contains(open) && !inner.contains(close) {
+                value = inner.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
         }
         guard !value.isEmpty else { throw BridgeError.message("翻译服务返回空白片段，未提交译文。") }
         return value
     }
 
+    /// Straight, curved, guillemet and CJK corner quotation pairs, in any language.
+    static let quotationPairs: [(String, String)] = [
+        ("\"", "\""), ("'", "'"), ("“", "”"), ("‘", "’"), ("„", "“"), ("‚", "‘"), ("«", "»"), ("‹", "›"),
+        ("「", "」"), ("『", "』"), ("《", "》"), ("〈", "〉"), ("＂", "＂")
+    ]
+    /// The pair enclosing the whole text, if any.
+    static func quotedPair(_ text: String) -> (String, String)? {
+        quotationPairs.first { open, close in
+            text.count > open.count + close.count && text.hasPrefix(open) && text.hasSuffix(close)
+        }
+    }
     static func fences(in text: String) -> Int {
         fence.numberOfMatches(in: text, range: NSRange(text.startIndex..., in: text))
     }
