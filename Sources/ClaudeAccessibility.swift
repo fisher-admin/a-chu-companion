@@ -6,6 +6,7 @@ struct ReplySnapshot: Sendable {
     let messages: [ChatMessage]
     let foundTranscript: Bool
     let responseComplete: Bool
+    var foundComposer = true
 }
 final class ClaudeSource: @unchecked Sendable {
     let pid: pid_t
@@ -101,7 +102,7 @@ final class ClaudeSource: @unchecked Sendable {
             }
             return nil
         }
-        guard let current = find(window, depth: 0) else { throw ReplyReadPending(message: "正在等待当前窗口的 Claude 对话页面。") }
+        guard let current = find(window, depth: 0) else { throw ReplyReadPending(message: "正在等待当前窗口的 Claude 对话页面。", structural: true) }
         root = current
     }
     func capture() async throws -> ReplySnapshot {
@@ -169,9 +170,11 @@ final class ClaudeSource: @unchecked Sendable {
         }
         var statusLabels: [String] = []
         var controlLabels: [String] = []
+        var foundComposer = false
         func generationStatus(_ element: AXUIElement, depth: Int) async throws {
             let (role, label, children) = try await info(element, depth: depth)
-            if ["Chat messages", "Sidebar", "Notifications"].contains(label) || ["AXTextArea", "AXTextField"].contains(role) { return }
+            if ["AXTextArea", "AXTextField"].contains(role) { foundComposer = true; return }
+            if ["Chat messages", "Sidebar", "Notifications"].contains(label) { return }
             if role == "AXButton" { controlLabels.append(label); return }
             if role == "AXStaticText" {
                 let value = Self.attribute(element, kAXValueAttribute) as? String ?? label
@@ -182,8 +185,10 @@ final class ClaudeSource: @unchecked Sendable {
         }
         try await generationStatus(root, depth: 0)
         guard let region = try await findTranscript(root, depth: 0) else {
-            if !fixture && URL(string: conversation)?.path.hasPrefix("/chat/") == true { throw ReplyReadPending(message: "Claude 消息区尚未就绪。") }
-            return ReplySnapshot(conversation: conversation, messages: [], foundTranscript: false, responseComplete: false)
+            if !fixture && URL(string: conversation)?.path.hasPrefix("/chat/") == true {
+                throw ReplyReadPending(message: "Claude 消息区尚未就绪。", structural: true)
+            }
+            return ReplySnapshot(conversation: conversation, messages: [], foundTranscript: false, responseComplete: false, foundComposer: foundComposer)
         }
         var viewport: CGRect?
         if visibleOnly {
@@ -219,6 +224,10 @@ final class ClaudeSource: @unchecked Sendable {
         }
         try await newest(region, depth: 0)
         elements.sort { $0.ordinal < $1.ordinal }
+        // An existing conversation always has numbered message cards; none means the labels changed.
+        if elements.isEmpty, !visibleOnly, !fixture, URL(string: conversation)?.path.hasPrefix("/chat/") == true {
+            throw ReplyReadPending(message: "未识别到 Claude 消息标记。", structural: true)
+        }
         if let latest = elements.last {
             guard (visibleOnly || latest.ordinal == latest.total), Set(elements.map(\.ordinal)).count == elements.count,
                   elements.allSatisfy({ $0.total == latest.total }) else { throw ReplyReadPending(message: "Claude 消息区正在更新。") }
@@ -260,6 +269,6 @@ final class ClaudeSource: @unchecked Sendable {
                 ClaudeDecoder.messages(node).filter { $0.author == .assistant && (element.ordinal < element.total || complete) }
             }
         } else { messages = try ClaudeDecoder.recentMessages(nodes) }
-        return ReplySnapshot(conversation: conversation, messages: messages, foundTranscript: true, responseComplete: complete)
+        return ReplySnapshot(conversation: conversation, messages: messages, foundTranscript: true, responseComplete: complete, foundComposer: foundComposer)
     }
 }

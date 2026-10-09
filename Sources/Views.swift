@@ -34,6 +34,8 @@ struct MainView: View {
                     Button(replies.watching ? "停止读取" : "开始读取") {
                         if replies.watching { replies.stop() } else { model.startReplyReading() }
                     }.controlSize(.mini).disabled(model.busy && !replies.watching)
+                    Button("断开") { model.disconnect() }.controlSize(.mini)
+                        .help("停止读取并恢复 Claude 的辅助功能设置")
                 }
                 Text(model.engine == "apple" ? "系统翻译" : "AI 翻译").font(.system(size: 10)).foregroundStyle(.secondary)
                     .padding(.horizontal, 7).padding(.vertical, 4)
@@ -90,10 +92,16 @@ struct MainView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if !replies.status.isEmpty && (model.hasTarget || !model.history.isEmpty) {
                     HStack(alignment: .top, spacing: 7) {
-                        if replies.translating { ProgressView().controlSize(.small) }
+                        if replies.readError != nil { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                        else if replies.translating { ProgressView().controlSize(.small) }
                         else { Image(systemName: "text.bubble").foregroundStyle(.secondary) }
-                        Text(replies.status).font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text(replies.status).font(.system(size: 11)).foregroundStyle(replies.readError != nil ? .orange : .secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                        if let notice = replies.fallbackNotice {
+                            Text("已改用系统翻译").font(.system(size: 10)).foregroundStyle(.orange)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.12), in: Capsule()).help(notice)
+                        }
                         Spacer(minLength: 0)
                         if replies.translating {
                             Button("取消翻译") { replies.cancelTranslation() }.controlSize(.mini)
@@ -157,17 +165,23 @@ struct MainView: View {
                 else { GlassBackground().ignoresSafeArea() }
             }
             .translationTask(model.configuration) { session in await model.runApple(session) }
-            .background {
-                if let attempt = replies.systemTaskID, let configuration = replies.reverseConfiguration {
-                    Color.clear.frame(width: 0, height: 0)
-                        .translationTask(configuration) { session in await replies.runSystemReply(session, attempt: attempt) }
-                        .id(attempt)
-                }
-            }
+            .background { SystemSessionHost(broker: replies.broker) }
             .sheet(isPresented: $replies.showHistoryPicker) { VisibleReplyPicker(replies: replies) }
             .sheet(isPresented: $model.showSettings) { SettingsView(model: model) }
             .sheet(isPresented: $usage.showConnection) { ClaudeUsageConnectionView(usage: usage) }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.refreshPermission() }
+    }
+}
+
+/// Runs the broker's `.translationTask`, which lends system translation sessions to the
+/// streaming pipeline before macOS 26 or while a language pack still needs downloading.
+struct SystemSessionHost: View {
+    @ObservedObject var broker: SystemSessionBroker
+    var body: some View {
+        if let configuration = broker.configuration {
+            Color.clear.frame(width: 0, height: 0)
+                .translationTask(configuration) { session in await broker.run(session) }
+        }
     }
 }
 
@@ -206,12 +220,21 @@ struct ChatBubble: View {
         HStack(alignment: .top) {
             if item.isUser { Spacer(minLength: 55) }
             VStack(alignment: .leading, spacing: 8) {
-                Label(item.isUser ? "你" : (item.chinese.isEmpty ? "Claude · 原文已读取" : "Claude · 中文译文"), systemImage: item.isUser ? "person.crop.circle" : "bubble.left")
+                Label(item.isUser ? "你" : item.streaming ? "Claude · 正在边接收边翻译" : (item.chinese.isEmpty ? "Claude · 原文已读取" : "Claude · 中文译文"),
+                      systemImage: item.isUser ? "person.crop.circle" : "bubble.left")
                     .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
                 if !item.isUser && item.chinese.isEmpty {
                     MessageText(text: item.foreign, original: true)
-                    Text("中文译文将在翻译完成后显示。").font(.system(size: 10)).foregroundStyle(.secondary)
-                } else { MessageText(text: item.chinese, fontSize: item.isUser ? 15 : fontSize) }
+                    Text(item.streaming ? "正在翻译第一段…" : "中文译文将在翻译完成后显示。").font(.system(size: 10)).foregroundStyle(.secondary)
+                } else {
+                    MessageText(text: item.chinese, fontSize: item.isUser ? 15 : fontSize)
+                    if item.streaming {
+                        HStack(spacing: 5) {
+                            ProgressView().controlSize(.mini)
+                            Text("后续段落翻译中…").font(.system(size: 10)).foregroundStyle(.secondary)
+                        }
+                    }
+                }
                 if !item.foreign.isEmpty && (item.isUser || !item.chinese.isEmpty) {
                     DisclosureGroup(item.language.name + "原文", isExpanded: $expanded) {
                         MessageText(text: item.foreign, original: true)
@@ -247,8 +270,9 @@ struct SettingsView: View {
                 Text("使用苹果系统翻译。可在主窗口选择英文、德文、日文或韩文，回复始终译回中文。首次使用某种语言可能需要下载语言包；发送前建议检查译文。")
                     .font(.system(size: 13)).foregroundStyle(.secondary)
             } else {
-                Text("使用支持 OpenAI 兼容格式的服务。你的中文和读取到的 Claude 回复会发送到该地址翻译；费用由该服务收取。")
+                Text("使用支持 OpenAI 兼容格式的服务。你的中文和读取到的 Claude 回复会发送到该地址翻译；费用由该服务收取。AI 超时、限流或译文未通过校验时自动改用系统翻译。")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
+                Button("使用 Gemini 地址") { baseURL = AIPreset.geminiBaseURL }.controlSize(.small)
                 VStack(alignment: .leading, spacing: 5) {
                     Text("接口地址").font(.system(size: 12, weight: .medium))
                     TextField("https://你的服务地址/v1", text: $baseURL).textFieldStyle(.roundedBorder)

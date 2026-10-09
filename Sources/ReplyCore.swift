@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 struct ReplyNode: Sendable {
     let role: String
@@ -20,28 +19,11 @@ struct ReplyCandidate: Equatable, Sendable {
 
 struct ReplyReadPending: LocalizedError, Sendable {
     let message: String
+    /// The transcript, its message markers or the composer could not be resolved at all,
+    /// as opposed to a reply that is still being written. Sustained structural failures
+    /// mean Claude's interface changed.
+    var structural = false
     var errorDescription: String? { message }
-}
-
-struct ReplyTranslationLifecycle {
-    private(set) var activeID: UUID?
-    var isTranslating: Bool { activeID != nil }
-
-    mutating func begin() -> UUID {
-        let id = UUID()
-        activeID = id
-        return id
-    }
-
-    func isCurrent(_ id: UUID) -> Bool { activeID == id }
-
-    @discardableResult mutating func finish(_ id: UUID) -> Bool {
-        guard activeID == id else { return false }
-        activeID = nil
-        return true
-    }
-
-    @discardableResult mutating func cancel(_ id: UUID) -> Bool { finish(id) }
 }
 
 enum ClaudeDecoder {
@@ -163,85 +145,11 @@ enum ClaudeDecoder {
             expected -= 1
         }
         guard !tail.isEmpty else {
-            throw ReplyReadPending(message: "最新消息的正文或作者标记尚未完整，未使用部分内容。")
+            // While Claude thinks, only the newest card lacks a body. When no card at all has
+            // a recognisable author marker, the labels themselves are no longer understood.
+            let anyDecoded = nodes.contains { !messages($0).isEmpty }
+            throw ReplyReadPending(message: "最新消息的正文或作者标记尚未完整，未使用部分内容。", structural: !anyDecoded)
         }
         return tail.reversed()
-    }
-    static func chunks(_ text: String, limit: Int = 5_000) -> [String] {
-        var chunks: [String] = []; var start = text.startIndex
-        while start < text.endIndex {
-            let end = text.index(start, offsetBy: limit, limitedBy: text.endIndex) ?? text.endIndex
-            chunks.append(String(text[start..<end])); start = end
-        }
-        return chunks
-    }
-}
-
-private struct MessageStamp: Equatable {
-    let ordinal: Int
-    let author: ChatMessage.Author
-    let digest: SHA256.Digest
-    init(_ message: ChatMessage) {
-        ordinal = message.ordinal; author = message.author
-        digest = SHA256.hash(data: Data(message.text.utf8))
-    }
-}
-
-struct ReplyTracker {
-    private let baseline: [MessageStamp]
-    private let baselineOrdinal: Int
-    private let outbound: String
-    private var conversation: String
-    private var anchor: Int?
-    private var anchorStamp: MessageStamp?
-    private var changedAt: TimeInterval = 0
-    private var emitted: ReplyCandidate?
-    private(set) var latest: ReplyCandidate?
-    var bound: Bool { anchor != nil }
-    init(baseline: [ChatMessage], outbound: String, conversation: String) {
-        self.baseline = baseline.suffix(4).map(MessageStamp.init)
-        baselineOrdinal = baseline.last?.ordinal ?? 0
-        self.outbound = ClaudeDecoder.normalize(outbound); self.conversation = conversation
-    }
-    mutating func observe(conversation current: String, messages: [ChatMessage], now: TimeInterval) throws -> ReplyCandidate? {
-        if current != conversation {
-            let initial = conversation.hasSuffix("/new") || conversation.hasSuffix("claude.ai/")
-            guard initial, anchor == nil, baseline.isEmpty, current.contains("claude.ai/chat/") else {
-                throw BridgeError.message("检测到切换会话，已停止自动读取。请在新会话重新唤出A畜伴侣。")
-            }
-            conversation = current
-        }
-        let ordinals = messages.map(\.ordinal)
-        guard ordinals == ordinals.sorted(), Set(ordinals).count == ordinals.count,
-              (ordinals.last ?? 0) >= baselineOrdinal else {
-            throw BridgeError.message("对话结构或历史发生变化，已停止自动读取。")
-        }
-        let stamps = messages.map(MessageStamp.init)
-        let overlap = baseline.filter { old in stamps.contains(where: { $0.ordinal == old.ordinal }) }
-        guard overlap.allSatisfy({ stamps.contains($0) }) else { throw BridgeError.message("已读取的消息发生变化，请重新连接会话。") }
-        if let anchorStamp {
-            guard stamps.contains(anchorStamp) else { throw BridgeError.message("无法核对原发送消息，已停止读取，请重新连接。") }
-        } else if !baseline.isEmpty && overlap.isEmpty {
-            throw BridgeError.message("旧消息已从界面隐藏，无法证明对话连续，请重新连接后读取。")
-        }
-        if anchor == nil {
-            if let first = messages.first(where: { $0.ordinal > baselineOrdinal }) {
-                guard first.ordinal == baselineOrdinal + 1, first.author == .user,
-                      ClaudeDecoder.normalize(first.text) == outbound else { throw BridgeError.message("检测到与译文不同的新消息或缺失消息，已停止读取。请重新唤出A畜伴侣。") }
-                anchor = first.ordinal
-                anchorStamp = MessageStamp(first)
-            }
-        }
-        if let anchor {
-            guard !messages.contains(where: { $0.ordinal > anchor && $0.author == .user }) else { throw BridgeError.message("检测到另一条用户消息，请重新连接后读取对应回复。") }
-            let later = messages.filter { $0.ordinal >= anchor }
-            guard zip(later, later.dropFirst()).allSatisfy({ $1.ordinal == $0.ordinal + 1 }) else { throw BridgeError.message("当前消息区不完整，请重新读取。") }
-        }
-        guard let anchor, let message = messages.last(where: { $0.author == .assistant && $0.ordinal > anchor }) else { return nil }
-        let candidate = ReplyCandidate(ordinal: message.ordinal, text: message.text)
-        if candidate != latest { latest = candidate; changedAt = now; return nil }
-        guard now - changedAt >= 3, candidate != emitted else { return nil }
-        emitted = candidate
-        return candidate
     }
 }
