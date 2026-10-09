@@ -4,7 +4,11 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
-## 1.2.0 — 2026-10-08 — build 29
+## 1.2.0 — 2026-10-08 — build 79
+
+Formal source release of the streaming optimization, originally recorded as build29. Build79 continues the existing build counter after build78; the build29 audit remains available. The build78 development branch is preserved separately and is not included in this release. See [release scope and known limitations](docs/releases/1.2.0.md) and [independent review](docs/reviews/2026-10-08-claude-1.2.0.md). / 正式源码发布原 build29 的流式优化，构建号接续 build78 使用 79；保留原审核记录。build78 开发分支单独保留，其全部功能未纳入本次发布。发布范围和已知问题见上述记录。
+
+Release preparation restores local-artifact exclusions, historical synthetic-session exemptions and Google API key scanning, with regression coverage. / 发布整理恢复本机产物排除、历史虚构 session 的精确白名单和 Google 密钥检测，并补充回归检查。
 
 ### Added / 新增
 
@@ -17,7 +21,7 @@ All existing Git commits and previous verification records are retained. Entries
 ### Fixed / 修复
 
 - A Claude interface change no longer leaves reading silently waiting: unresolved transcript, message markers or composer for 45 seconds shows a clear warning, and reading recovers automatically. / Claude 界面变化不再无声等待：45 秒仍无法识别时明确提示，恢复后自动继续。
-- Automatic sending is reported only after Claude's composer empties; otherwise the user is asked to check. / 自动发送确认输入框已清空才报告成功，否则提示检查。
+- Automatic sending checks whether the composer is empty or no longer contains the inserted translation; this is not proof of server receipt, and nonempty changes can produce a false positive (see known limitations). / 自动发送检查输入框清空或不再包含译文；这不证明服务器已接收，非空文字变化也可能被误判，见已知问题。
 - Clipboard writes during insertion carry `org.nspasteboard.TransientType` and `ConcealedType`. / 回填剪贴板带临时与隐藏标记。
 - Accessibility opt-ins enabled in Chrome/Electron are switched back off on disconnect, app switch or quit, leaving the app's own settings untouched. / 断开、切换或退出时关闭本程序开启的辅助功能选项，不改动应用自身设置。
 

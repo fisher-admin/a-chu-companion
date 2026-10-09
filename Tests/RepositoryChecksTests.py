@@ -36,6 +36,18 @@ class RepositoryChecksTests(unittest.TestCase):
         private = "-----BEGIN " + "PRIVATE KEY-----\nconfidential\n"
         self.assertEqual(checks.credential_kinds("local.pem", private), ["private key"])
 
+    def test_historical_fidelity_fixture_is_allowed_only_in_its_test_file(self):
+        fixture = "sk-ant-" + "sid01-fixtureonlyabcdefghijklmnop"
+        self.assertEqual(checks.credential_kinds("Tests/FidelityFallbackTests.swift", fixture), [])
+        self.assertEqual(checks.credential_kinds("README.md", fixture), ["Claude session"])
+        different = "sk-ant-" + "sid01-" + "R" * 50
+        self.assertEqual(checks.credential_kinds("Tests/FidelityFallbackTests.swift", different), ["Claude session"])
+
+    def test_google_api_key_pattern_is_detected_without_returning_the_key(self):
+        fixture = "AI" + "za" + "x" * 35
+        self.assertEqual(checks.credential_kinds("config", fixture), ["Google API key"])
+        self.assertEqual(checks.credential_kinds("config", "AI" + "za" + "x" * 34), [])
+
     def test_independent_provider_tokens_are_detected(self):
         github = "gh" + "p_" + "x" * 36
         anthropic = "sk-ant-" + "api03-" + "x" * 48

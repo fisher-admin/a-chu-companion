@@ -11,6 +11,8 @@
 
 AChu Companion is a native macOS menu bar app that combines Chinese composition, translated message insertion, Chinese translations of Claude replies, and account usage in one window. Choose English, German, Japanese, or Korean as the conversation language; Chinese remains the primary writing and reading language.
 
+The current formal source release is **1.2.0 · build79**. It publishes the streaming optimization and does not include all features from the separate build78 development branch, including CLI support, native web usage acquisition, dedicated Gemini configuration and table rendering. Known reading, segmentation and scrolling issues remain. Read the [release scope and limitations](docs/releases/1.2.0.md) and [independent review in Chinese](docs/reviews/2026-10-08-claude-1.2.0.md) before installing.
+
 This is an independent community project, not an Anthropic or official Claude product. It reduces copying and switching between tools, but does not guarantee that translated prompts are more accurate than the Chinese originals.
 
 ## Features
@@ -19,7 +21,7 @@ This is an independent community project, not an Anthropic or official Claude pr
 - **Dual engine with automatic fallback:** Optional Gemini or other OpenAI-compatible AI translation. AI output is checked first (language, length, code fences, inline code, links, added preambles). On timeout, rate limiting (429), a rejected key, or a failed check, that segment is translated by the system instead and a "已改用系统翻译" notice shows the reason. Repeated failures pause AI for a while before it is retried.
 - **One-page chat:** Enter submits; Shift+Enter inserts a newline. Enter used to confirm Chinese input-method composition does not submit. Translate only, insert and review, or opt into automatic sending.
 - **Streaming translation:** Connecting starts monitoring. Messages entered in the companion or directly in Claude can produce translated replies. While Claude is still writing, each completed sentence or paragraph is translated and shown in source order; code blocks are kept verbatim and never sent for translation. Tool activity and interface controls are excluded from formal replies.
-- **Send confirmation and interface-change warning:** Automatic sending is reported as sent only after Claude's input box empties. If Claude's interface stays unreadable for about 45 seconds, a clear warning appears; reading resumes automatically once it recovers.
+- **Send confirmation and interface-change warning:** After sending, the app checks whether the composer is empty or no longer contains the inserted translation. This is not proof of server receipt and can report a false positive. If Claude's interface stays unreadable for about 45 seconds, a clear warning appears; reading resumes automatically once it recovers.
 - **Background operation:** Keep working in another app while reading continues. Closing the companion window hides it; stopping reading or quitting ends monitoring. Keep the connected Claude conversation window open.
 - **Conversation following and history:** Reading follows conversation changes in the same connected window. Reconnect the composer before sending to another conversation. Select from visible, completed historical replies for on-demand translation.
 - **Long-response reading:** New translations open at the beginning, with scrolling and expandable originals. Chinese text sizes are 12, 14, and 16; default 14. Language and text-size preferences persist.
@@ -88,7 +90,7 @@ Installation validates the existing identity. Failed builds or identity mismatch
 
 Default system translation requires no translation API key; initial language-pack downloads may need a network connection. Optional AI translation sends Chinese drafts and foreign replies to your configured provider, under that provider's pricing and data policies. Streaming translation splits one reply into several shorter requests.
 
-Translations placed on the clipboard for insertion carry transient and concealed markers, so clipboard managers do not record them. Disconnecting or quitting switches off the accessibility options the companion enabled in Claude or Chrome for reading.
+Translations placed on the clipboard for insertion carry transient and concealed markers requesting that cooperating clipboard managers ignore them; third-party tools may not honour these markers. Disconnecting or quitting switches off the accessibility options the companion enabled in Claude or Chrome for reading.
 
 Chat history is not written to disk. Supplied sessions and translation keys live in macOS Keychain. Usage requests are read-only, send session credentials only to the Claude domain, and do not send chat messages. Connect the correct usage account when browser and desktop logins differ.
 
