@@ -6,12 +6,16 @@
 
 [![CI](https://github.com/fisher-admin/a-chu-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/fisher-admin/a-chu-companion/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/fisher-admin/a-chu-companion)](https://github.com/fisher-admin/a-chu-companion/releases/latest)
+[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-Community-ffb003)](https://linux.do/)
 
 ![A畜伴侣应用图标](docs/assets/companion-icon.png)
 
 A畜伴侣是一款原生 macOS 菜单栏应用，把中文输入、外语回填、Claude 回复的中文翻译和账户额度放在一个窗口中。英文、德文、日文、韩文可选其一，中文始终是主要输入与阅读语言。
 
 这是独立的社区项目，与 Anthropic 没有隶属关系，也不是 Claude 官方产品。它减少复制、粘贴和切换工具的操作，不保证翻译后的指令一定比中文原文更准确。
+
+当前正式版本：**[1.2.1（build81）](https://github.com/fisher-admin/a-chu-companion/releases/tag/v1.2.1)**，采用 MIT 许可，以源码形式发布。
 
 ## 主要功能
 
@@ -29,9 +33,9 @@ A畜伴侣是一款原生 macOS 菜单栏应用，把中文输入、外语回填
 - **Code 分段回复**：后面已出现新段落的完成段落立即开始翻译；仍在增长的末尾连续稳定约三秒后翻译，无需等待下一次工具运行或整轮结束；续写稳定后更新对应分段，不显示工具进度和输出。每个分段单独计入最近十条译文。
 - **原生外观**：猪头中央 A 的菜单栏图标，随系统明暗外观变化的磨砂玻璃界面及紧凑布局。
 
-## 当前开发版优化
+## 当前正式版本
 
-当前开发版 **1.2.1 build81** 以 build78 为基础，迁入 1.2.0 中经审核保留的改进，不改变三端发送、额度来源、Gemini 配置、表格显示和分段记录规则：
+当前正式版 **1.2.1 build81** 以 build78 为基础，迁入 1.2.0 中经审核保留的改进，不改变三端发送、额度来源、Gemini 配置、表格显示和分段记录规则：
 
 - **更快的分段翻译**：后面已有新段落的完成段落立即翻译，末尾仍按稳定约三秒处理；云端翻译最多同时处理三个片段，仍严格按原文顺序显示。系统翻译保持逐段进行。
 - **服务暂停**：密钥或项目被拒绝（401/403）时与限流一样暂停该服务，后续片段直接改用系统翻译，不再逐段重复失败请求；更换密钥即重新尝试。
@@ -142,6 +146,8 @@ build70全量离线回归为34组，CLI输入检查49项，连接路由30项；�
 build41 修订句内文件、链接和强调文字的多余断行，并在所有翻译方式的共同流程中处理翻译服务新增的换行，保留真实段落、代码、列表及表格结构。段落模拟与窗口显示检查见[排版记录](docs/testing/paragraph-layout-2026-10-06.md)。之前 Code 补测证明阶段中文提前出现，但也记录了未译阶段、表格语义问题及测试预算超限，不能据此宣称完整真实验收通过；详见[2026-10-06 补测报告](docs/testing/real-code-supplement-results-2026-10-06.md)。
 
 ## 社区与许可
+
+本项目认可 [LINUX DO](https://linux.do/) 社区，认同其「真诚、友善、团结、专业」的社区文化。欢迎社区朋友使用、反馈和参与改进。
 
 欢迎 [问题报告](https://github.com/fisher-admin/a-chu-companion/issues/new/choose)、功能建议和 Pull Request。先阅读 [CONTRIBUTING](CONTRIBUTING.md)、[行为准则](CODE_OF_CONDUCT.md) 和 [SUPPORT](SUPPORT.md)。
 

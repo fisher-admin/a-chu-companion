@@ -6,6 +6,8 @@
 
 [![CI](https://github.com/fisher-admin/a-chu-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/fisher-admin/a-chu-companion/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/fisher-admin/a-chu-companion)](https://github.com/fisher-admin/a-chu-companion/releases/latest)
+[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-Community-ffb003)](https://linux.do/)
 
 ![AChu Companion icon](docs/assets/companion-icon.png)
 
@@ -13,9 +15,11 @@ AChu Companion is a native macOS menu bar app that combines Chinese composition,
 
 This is an independent community project, not an Anthropic or official Claude product. It reduces copying and switching between tools, but does not guarantee that translated prompts are more accurate than the Chinese originals.
 
-## Current development changes
+Current release: **[1.2.1 (build81)](https://github.com/fisher-admin/a-chu-companion/releases/tag/v1.2.1)**, distributed as source under the MIT license.
 
-Current development build **1.2.1 build81** is based on build78 and ports the reviewed improvements from 1.2.0, without changing Desktop/Web/CLI sending, usage sources, Gemini settings, table display or per-segment records:
+## Current release
+
+Current release **1.2.1 build81** is based on build78 and ports the reviewed improvements from 1.2.0, without changing Desktop/Web/CLI sending, usage sources, Gemini settings, table display or per-segment records:
 
 - **Faster segment translation:** a finished paragraph followed by a new one translates immediately; the tail still waits about three seconds of stability. Cloud translation runs up to three slices at once and still renders strictly in source order; system translation stays one slice at a time.
 - **Service pause:** a rejected key or project (401/403) pauses that service like a rate limit, so later slices go straight to system translation instead of repeating failed requests. A new key is tried again.
@@ -142,6 +146,8 @@ Build70 passed 34 offline groups, including 49 CLI input and 30 routing checks, 
 Build41 removes injected line breaks around inline files, links and emphasis, and handles provider-added line breaks in the shared system/AI translation path while preserving genuine paragraphs, code, lists and table structure. See the [paragraph-layout record](docs/testing/paragraph-layout-2026-10-06.md) for simulations and native UI checks. Earlier Code tests demonstrated an early Chinese stage, but also recorded untranslated stages, table-semantic failures and an exceeded test budget; they do not establish full live acceptance. See the [2026-10-06 supplement report](docs/testing/real-code-supplement-results-2026-10-06.md).
 
 ## Community and license
+
+This project recognises the [LINUX DO](https://linux.do/) community and shares its values of sincerity, friendliness, solidarity and professionalism. Community members are welcome to use the app, share feedback and contribute.
 
 [Report issues](https://github.com/fisher-admin/a-chu-companion/issues/new/choose), propose improvements, or submit pull requests. Read [Contributing](CONTRIBUTING.md), [Code of Conduct](CODE_OF_CONDUCT.md), and [Support](SUPPORT.md).
 
