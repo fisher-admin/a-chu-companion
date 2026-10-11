@@ -15,12 +15,13 @@ This is an independent community project, not an Anthropic or official Claude pr
 
 ## Current development changes
 
-Current development build **1.2.1 build81** is based on build78 and ports the reviewed improvements from 1.2.0, without changing Desktop/Web/CLI sending, usage sources, Gemini settings, table display or per-segment records:
+Current development build **1.2.1 build82** is based on build78 and ports the reviewed improvements from 1.2.0, without changing Desktop/Web/CLI sending, usage sources, Gemini settings, table display or per-segment records:
 
 - **Faster segment translation:** a finished paragraph followed by a new one translates immediately; the tail still waits about three seconds of stability. Cloud translation runs up to three slices at once and still renders strictly in source order; system translation stays one slice at a time.
 - **Service pause:** a rejected key or project (401/403) pauses that service like a rate limit, so later slices go straight to system translation instead of repeating failed requests. A new key is tried again.
 - **Chatter cleanup only:** remove an added "Here is the translation:" style preamble, a code fence wrapped around the whole answer, and added outer quotes. Language, length and meaning are not checked; only an unpaired fence makes that slice use system translation.
 - **Interface-change warning:** if Claude's page, transcript or message markers stay unrecognised for about 45 seconds, a clear warning appears; reading continues and clears it on recovery. Thinking and tool runs never trigger it.
+- **First-press shortcut connection:** ⌃⌥E records the frontmost app first; when accessibility was just enabled for the Claude desktop app or a Chromium browser, it waits up to 1.5 seconds, without blocking the UI, for the input box to become readable. This fixes the first press after a companion restart binding the whole page instead of the input box.
 - **Clipboard and accessibility:** translations placed on the clipboard for insertion carry transient and concealed markers, which ask clipboard tools not to keep them. Tools that honour these markers do not record the text, but compliance depends on each third-party tool; it is not guaranteed for all of them. When the connection moves to another app or the companion quits, the Chrome/Electron accessibility options it enabled for reading are switched back off; settings the app already had are untouched.
 - **Bounded memory:** replies evicted from the ten-item history are remembered by conversation, message and segment, with many segments of one message compressed into ranges, keeping only recent conversations and message ranges. Long sessions stay bounded, and a Code reply with hundreds of segments cannot bring older segments that are still on screen back into the history.
 

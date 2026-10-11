@@ -4,6 +4,11 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.2.1 — 2026-10-10 — build 82 — 修复首次快捷键连不上输入框
+
+- Chromium/Electron apps (Claude desktop, Chrome, Edge, Brave, Arc…) build their accessibility tree asynchronously after `AXManualAccessibility`/`AXEnhancedUserInterface` are switched on. The first ⌃⌥E queried focus in the same instant and bound the bare web view; because build80 releases these options on quit, this recurred after every companion restart. Capture now records the frontmost app before the panel activates and, only after a fresh opt-in or for Chromium apps, waits up to 1.5 s (checking every 50 ms, off the main thread) for an editable focused element with a window, falling back to the previous behaviour on timeout. / Chromium／Electron 打开辅助功能后异步建立界面树，首次按 ⌃⌥E 立即读取焦点会连到整个页面；build80 起退出时关闭这些选项，因此每次重启伴侣都会复现。现在先记下当前应用，仅在刚开启选项或 Chromium 类应用时，最多等待 1.5 秒（每 50 毫秒检查、不阻塞界面）直到可编辑输入框出现，超时沿用原行为。
+- Tests: five focus-settling checks (ready immediately, cold tree ready on the fifth read, nil then ready, never ready → timeout fallback, Chromium bundle list). / 测试新增五项焦点等待检查。
+
 ## 1.2.1 — 2026-10-08 — build 81 — 修复 build80 审核发现的三处边界问题
 
 Fixes the three P2 regressions reproduced in the [build80 review](docs/reviews/2026-10-08-build80-review.zh-CN.md). / 修复 build80 审核复现的三处问题。

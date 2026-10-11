@@ -66,20 +66,46 @@ final class TargetBridge {
             (attribute(element, kAXSubroleAttribute) as? String) != kAXSecureTextFieldSubrole &&
             (attribute(element, kAXEnabledAttribute) as? Bool) != false
     }
-    static func capture() throws -> Target {
+    /// Chromium-based apps whose accessibility tree is built only after the opt-in flags.
+    static let chromiumBundles: Set<String> = ["com.anthropic.claudefordesktop", "com.google.Chrome", "com.google.Chrome.canary",
+                                               "com.microsoft.edgemac", "com.brave.Browser", "company.thebrowser.Browser",
+                                               "org.chromium.Chromium", "com.vivaldi.Vivaldi", "com.operasoftware.Opera"]
+    /// Polls until `ready` accepts a value or the timeout passes, then returns the last value
+    /// read. Never blocks the main thread.
+    static func settle<T>(timeout: Duration = .milliseconds(1500), interval: Duration = .milliseconds(50),
+                          read: () -> T?, ready: (T) -> Bool) async -> T? {
+        let clock = ContinuousClock(), deadline = clock.now.advanced(by: timeout)
+        var last = read()
+        while !(last.map(ready) ?? false), clock.now < deadline {
+            try? await Task.sleep(for: interval)
+            if let value = read() { last = value }
+        }
+        return last
+    }
+    /// The frontmost app is read synchronously by the caller, before the companion's own
+    /// panel activates; the focused input is then read from that app.
+    static func capture(from frontmost: NSRunningApplication?) async throws -> Target {
         guard trusted else { throw BridgeError.message("请先在系统设置中允许「A畜伴侣」使用辅助功能，再回到聊天输入框按 ⌃⌥E。") }
-        guard let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+        guard let app = frontmost, app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
             throw BridgeError.message("请先点击目标软件的聊天输入框，再按 ⌃⌥E。")
         }
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(axApp, 1)
         // Electron/Chromium expose focused controls after this accessibility opt-in.
         // Only flags switched on here are recorded, so releasing restores the app's own setting.
+        var switchedOn = false
         for flag in optInFlags where accessibilityFlags.shouldEnable(pid: app.processIdentifier, flag: flag,
                                                                       currentlyOn: attribute(axApp, flag) as? Bool == true) {
-            AXUIElementSetAttributeValue(axApp, flag as CFString, kCFBooleanTrue)
+            switchedOn = AXUIElementSetAttributeValue(axApp, flag as CFString, kCFBooleanTrue) == .success || switchedOn
         }
-        guard let element = elementAttribute(axApp, kAXFocusedUIElementAttribute),
+        // Chromium builds its tree asynchronously after the opt-in, so the first query right
+        // after switching it on returns the bare web view instead of the user's input box.
+        // Wait briefly for a real text input rather than binding to that placeholder.
+        let focused = { elementAttribute(axApp, kAXFocusedUIElementAttribute) }
+        let settled = switchedOn || chromiumBundles.contains(app.bundleIdentifier ?? "")
+            ? await settle(read: focused, ready: { editable($0) && elementAttribute($0, kAXWindowAttribute) != nil })
+            : focused()
+        guard let element = settled,
               (attribute(element, kAXSubroleAttribute) as? String) != kAXSecureTextFieldSubrole,
               (attribute(element, kAXEnabledAttribute) as? Bool) != false,
               let window = elementAttribute(element, kAXWindowAttribute) ?? elementAttribute(axApp, kAXFocusedWindowAttribute) else {
