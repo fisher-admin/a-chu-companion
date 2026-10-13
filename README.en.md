@@ -1,11 +1,13 @@
 # AChu Companion · A畜伴侣
 
-**Write in Chinese. Chat with Claude across languages.**
+**Write in Chinese. Claude receives a translated message. Read its replies in Chinese.**
 
 [中文](README.md) · [Help](SUPPORT.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Privacy](docs/PRIVACY.md)
 
 [![CI](https://github.com/fisher-admin/a-chu-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/fisher-admin/a-chu-companion/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/fisher-admin/a-chu-companion)](https://github.com/fisher-admin/a-chu-companion/releases/latest)
+[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-Community-ffb003)](https://linux.do/)
 
 ![AChu Companion icon](docs/assets/companion-icon.png)
 
@@ -13,9 +15,19 @@ AChu Companion is a native macOS menu bar app that combines Chinese composition,
 
 This is an independent community project, not an Anthropic or official Claude product. It reduces copying and switching between tools, but does not guarantee that translated prompts are more accurate than the Chinese originals.
 
-## Current development changes
+Current release: **[1.2.2 (build82)](https://github.com/fisher-admin/a-chu-companion/releases/tag/v1.2.2)**, distributed as source under MIT. The latest fix waits for the target composer on the first connection shortcut after a restart, avoiding an accidental connection to the whole page.
 
-Current development build **1.2.1 build82** is based on build78 and ports the reviewed improvements from 1.2.0, without changing Desktop/Web/CLI sending, usage sources, Gemini settings, table display or per-segment records:
+Click the target input, press **Control+Option+E**, select a target language in the companion, and enable **Send after filling** for automatic sending. macOS system translation is the default; Gemini and compatible AI translators are optional.
+
+## Interface preview
+
+![AChu Companion actual interface](docs/assets/companion-interface.jpg)
+
+The screenshot shows the disconnected, empty state without personal account information. See the [annotated interface guide (Chinese)](docs/assets/companion-interface-guide.png) or the instructions below.
+
+## Current release
+
+Current release **1.2.2 build82** includes the first-press connection fix and retains build78's Desktop/Web/CLI flow and the reviewed streaming improvements. Sending, usage sources, Gemini settings, table display and per-segment records remain consistent:
 
 - **Faster segment translation:** a finished paragraph followed by a new one translates immediately; the tail still waits about three seconds of stability. Cloud translation runs up to three slices at once and still renders strictly in source order; system translation stays one slice at a time.
 - **Service pause:** a rejected key or project (401/403) pauses that service like a rate limit, so later slices go straight to system translation instead of repeating failed requests. A new key is tried again.
@@ -88,7 +100,7 @@ Releases currently provide source, not a universal Apple Developer ID notarized 
 1. Allow AChu Companion under System Settings → Privacy & Security → Accessibility.
 2. Click Claude's message box and press **Control+Option+E** on your physical keyboard.
 3. Select a conversation language and enter Chinese in the companion.
-4. By default, review and send the inserted translation yourself. To send automatically, enable the send option and choose Enter or Command+Enter.
+4. Enable **Send after filling** and choose Enter or Command+Enter for automatic sending. Disable it to insert the translation and send manually.
 5. Completed replies are read automatically. Stop, resume, or request historical replies whenever needed.
 
 Permission changes are detected without restarting. Normal updates using the same local signing identity can retain authorization; a new computer, changed identity, or revoked permission may require authorization again.
@@ -143,6 +155,8 @@ Build70 passed 34 offline groups, including 49 CLI input and 30 routing checks, 
 Build41 removes injected line breaks around inline files, links and emphasis, and handles provider-added line breaks in the shared system/AI translation path while preserving genuine paragraphs, code, lists and table structure. See the [paragraph-layout record](docs/testing/paragraph-layout-2026-10-06.md) for simulations and native UI checks. Earlier Code tests demonstrated an early Chinese stage, but also recorded untranslated stages, table-semantic failures and an exceeded test budget; they do not establish full live acceptance. See the [2026-10-06 supplement report](docs/testing/real-code-supplement-results-2026-10-06.md).
 
 ## Community and license
+
+This project recognises the [LINUX DO](https://linux.do/) community and shares its values of sincerity, friendliness, solidarity and professionalism. Community members are welcome to use the app, share feedback and contribute. This link expresses the project's recognition of the community, not official certification or ownership by the community.
 
 [Report issues](https://github.com/fisher-admin/a-chu-companion/issues/new/choose), propose improvements, or submit pull requests. Read [Contributing](CONTRIBUTING.md), [Code of Conduct](CODE_OF_CONDUCT.md), and [Support](SUPPORT.md).
 

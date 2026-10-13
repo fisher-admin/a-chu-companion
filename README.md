@@ -1,17 +1,29 @@
 # A畜伴侣 · AChu Companion
 
-**用中文输入，以多种语言与 Claude 交流。**
+**你写中文，Claude 收到外文；回复自动译回中文。**
 
 [English](README.en.md) · [使用帮助](SUPPORT.md) · [版本更新](CHANGELOG.md) · [贡献](CONTRIBUTING.md) · [隐私](docs/PRIVACY.md)
 
 [![CI](https://github.com/fisher-admin/a-chu-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/fisher-admin/a-chu-companion/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/fisher-admin/a-chu-companion)](https://github.com/fisher-admin/a-chu-companion/releases/latest)
+[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-Community-ffb003)](https://linux.do/)
 
 ![A畜伴侣应用图标](docs/assets/companion-icon.png)
 
 A畜伴侣是一款原生 macOS 菜单栏应用，把中文输入、外语回填、Claude 回复的中文翻译和账户额度放在一个窗口中。英文、德文、日文、韩文可选其一，中文始终是主要输入与阅读语言。
 
 这是独立的社区项目，与 Anthropic 没有隶属关系，也不是 Claude 官方产品。它减少复制、粘贴和切换工具的操作，不保证翻译后的指令一定比中文原文更准确。
+
+当前正式版本：**[1.2.2（build82）](https://github.com/fisher-admin/a-chu-companion/releases/tag/v1.2.2)**，采用 MIT 许可，以源码形式发布。最新修复：重启后首次按连接快捷键，等待目标输入框就绪，避免误连到整个页面。
+
+点击目标输入框，按 **Control＋Option＋E** 连接；在伴侣中选择对方语言，开启「填入后发送」，即可用中文连续交流。默认系统翻译，也可选 Gemini 或兼容 AI 翻译服务。
+
+## 界面预览
+
+![A畜伴侣真实界面](docs/assets/companion-interface.jpg)
+
+截图为未连接、无聊天记录的界面，不展示个人账户。查看[各区域功能说明图](docs/assets/companion-interface-guide.png)，或阅读下方使用说明。
 
 ## 主要功能
 
@@ -29,9 +41,9 @@ A畜伴侣是一款原生 macOS 菜单栏应用，把中文输入、外语回填
 - **Code 分段回复**：后面已出现新段落的完成段落立即开始翻译；仍在增长的末尾连续稳定约三秒后翻译，无需等待下一次工具运行或整轮结束；续写稳定后更新对应分段，不显示工具进度和输出。每个分段单独计入最近十条译文。
 - **原生外观**：猪头中央 A 的菜单栏图标，随系统明暗外观变化的磨砂玻璃界面及紧凑布局。
 
-## 当前开发版优化
+## 当前正式版本
 
-当前开发版 **1.2.1 build82** 以 build78 为基础，迁入 1.2.0 中经审核保留的改进，不改变三端发送、额度来源、Gemini 配置、表格显示和分段记录规则：
+当前正式版 **1.2.2 build82** 包含首次快捷键连接修复，延续 build78 的三端流程与经审核保留的流式翻译改进。发送、额度来源、Gemini 配置、表格显示和分段记录规则保持一致：
 
 - **更快的分段翻译**：后面已有新段落的完成段落立即翻译，末尾仍按稳定约三秒处理；云端翻译最多同时处理三个片段，仍严格按原文顺序显示。系统翻译保持逐段进行。
 - **服务暂停**：密钥或项目被拒绝（401/403）时与限流一样暂停该服务，后续片段直接改用系统翻译，不再逐段重复失败请求；更换密钥即重新尝试。
@@ -88,7 +100,7 @@ open "$HOME/Applications/A畜伴侣.app"
 1. 在「系统设置 → 隐私与安全性 → 辅助功能」允许 A畜伴侣。
 2. 点击 Claude 的消息输入框，用实体键盘按 **Control＋Option＋E** 连接。
 3. 选择英文、德文、日文或韩文，在伴侣中输入中文，回车提交。
-4. 默认仅填入译文，由你确认后发送；需要自动发送时开启「填入后发送」，选择回车或 Command＋回车。
+4. 开启「填入后发送」，选择回车或 Command＋回车，即可自动发送；关闭时仅填入译文，由你手动发送。
 5. 连接后自动读取完整回复。可随时停止、恢复，或点击「读取历史回复」。
 
 Claude Code终端请在正在使用的输入位置用实体键盘按 **Control＋Option＋E**。无需清空推荐文字、选择CLI会话或等待底部标记；伴侣立即保存你选定的位置。回复和额度独立获取，只将所选窗口中明确匹配的会话报告用于读取；无法关联读取时，仍可翻译和发送。主界面「连接 CLI」补充准备或刷新读取入口，不替换你手选的发送位置。
@@ -143,6 +155,8 @@ build70全量离线回归为34组，CLI输入检查49项，连接路由30项；�
 build41 修订句内文件、链接和强调文字的多余断行，并在所有翻译方式的共同流程中处理翻译服务新增的换行，保留真实段落、代码、列表及表格结构。段落模拟与窗口显示检查见[排版记录](docs/testing/paragraph-layout-2026-10-06.md)。之前 Code 补测证明阶段中文提前出现，但也记录了未译阶段、表格语义问题及测试预算超限，不能据此宣称完整真实验收通过；详见[2026-10-06 补测报告](docs/testing/real-code-supplement-results-2026-10-06.md)。
 
 ## 社区与许可
+
+本项目认可 [LINUX DO](https://linux.do/) 社区，认同其「真诚、友善、团结、专业」的社区文化。欢迎社区朋友使用、反馈和参与改进。此链接表达本项目对社区的认可，不代表社区官方出品或认证。
 
 欢迎 [问题报告](https://github.com/fisher-admin/a-chu-companion/issues/new/choose)、功能建议和 Pull Request。先阅读 [CONTRIBUTING](CONTRIBUTING.md)、[行为准则](CODE_OF_CONDUCT.md) 和 [SUPPORT](SUPPORT.md)。
 

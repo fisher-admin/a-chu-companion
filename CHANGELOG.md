@@ -4,6 +4,15 @@ All existing Git commits and previous verification records are retained. Entries
 
 [Full development archive / 完整开发记录](docs/DEVELOPMENT_HISTORY.zh-CN.md) · [Verification / 验收](TEST_PLAN.md)
 
+## 1.2.2 — 2026-10-12 — build 82 — 正式源码发布 / Formal source release
+
+- Promote the build82 first-press connection fix to a new patch release. Application release metadata becomes 1.2.2; build82's functional source is unchanged. / 将 build82 首次快捷键连接修复纳入新的补丁发布；应用版本标记为 1.2.2，build82 功能源码不变。
+- Refresh both READMEs with the current release, actual interface screenshot, annotated guide and automatic Chinese conversation instructions. / 更新中英文首页：最新发布、真实界面截图、区域说明图和自动中文交流步骤。
+- Add linked LINUX DO community recognition to both READMEs and release notes. / 中英文首页与发布说明加入 LINUX DO 社区认可链接。
+- Preserve v1.2.1, older releases, all original commits and prior acceptance records. Source-only distribution continues; no local signing or account data is distributed. / 保留 v1.2.1、旧发行、全部原始提交及验收记录；继续以源码发布，不分发本机签名或账户资料。
+
+Validation and live-test limits: see [TEST_PLAN](TEST_PLAN.md). / 验证与真实环境边界见 TEST_PLAN。
+
 ## 1.2.1 — 2026-10-10 — build 82 — 修复首次快捷键连不上输入框
 
 - Chromium/Electron apps (Claude desktop, Chrome, Edge, Brave, Arc…) build their accessibility tree asynchronously after `AXManualAccessibility`/`AXEnhancedUserInterface` are switched on. The first ⌃⌥E queried focus in the same instant and bound the bare web view; because build80 releases these options on quit, this recurred after every companion restart. Capture now records the frontmost app before the panel activates and, only after a fresh opt-in or for Chromium apps, waits up to 1.5 s (checking every 50 ms, off the main thread) for an editable focused element with a window, falling back to the previous behaviour on timeout. / Chromium／Electron 打开辅助功能后异步建立界面树，首次按 ⌃⌥E 立即读取焦点会连到整个页面；build80 起退出时关闭这些选项，因此每次重启伴侣都会复现。现在先记下当前应用，仅在刚开启选项或 Chromium 类应用时，最多等待 1.5 秒（每 50 毫秒检查、不阻塞界面）直到可编辑输入框出现，超时沿用原行为。
