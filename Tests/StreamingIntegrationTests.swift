@@ -32,6 +32,7 @@ import AppKit
         try await lateRevision()
         quotes()
         try await longStages()
+        try await focusSettling()
         print("\(passed) streaming integration contracts passed")
     }
 
@@ -265,6 +266,36 @@ import AppKit
         check(clean("“你好。”", "Hello.") == "你好。", "quotes added around an unquoted source are still removed")
         check(clean("“A”或“B”", "Use A or B") == "“A”或“B”", "two separate quotations are never mistaken for a wrapper")
         check(clean("'tis done'", "It is done") == "'tis done'", "apostrophes are never stripped as quotes")
+    }
+
+    /// ⌃⌥E right after the Chromium opt-in: the first focused element is the bare web view.
+    @MainActor static func focusSettling() async throws {
+        var reads = 0
+        let immediate = await TargetBridge.settle(read: { reads += 1; return "composer" }, ready: { $0 == "composer" })
+        check(immediate == "composer" && reads == 1, "an input box that is already available is used at once")
+
+        reads = 0
+        let started = ContinuousClock.now
+        let cold = await TargetBridge.settle(interval: .milliseconds(10), read: { () -> String? in
+            reads += 1; return reads < 5 ? "web view" : "composer"
+        }, ready: { $0 == "composer" })
+        check(cold == "composer" && reads == 5 && ContinuousClock.now - started < .seconds(1),
+              "a cold Chromium tree is waited for until the input box appears, instead of binding to the web view")
+
+        reads = 0
+        let empty = await TargetBridge.settle(interval: .milliseconds(10), read: { () -> String? in
+            reads += 1; return reads < 3 ? nil : "composer"
+        }, ready: { $0 == "composer" })
+        check(empty == "composer", "no focused element at first is also waited out")
+
+        let waitStart = ContinuousClock.now
+        let never = await TargetBridge.settle(timeout: .milliseconds(120), interval: .milliseconds(10),
+                                              read: { "terminal view" }, ready: { _ in false })
+        let waited = ContinuousClock.now - waitStart
+        check(never == "terminal view" && waited >= .milliseconds(120) && waited < .seconds(2),
+              "a focus that never becomes a text input is still used after the bounded wait, as before")
+        check(TargetBridge.chromiumBundles.contains("com.anthropic.claudefordesktop") && TargetBridge.chromiumBundles.contains("com.google.Chrome")
+              && !TargetBridge.chromiumBundles.contains("com.apple.Terminal"), "only Chromium-based apps get the extra wait without a fresh opt-in")
     }
 
     /// Review issue 2: re-reading one Code reply with 600 segments changes nothing.

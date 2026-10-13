@@ -119,7 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if capture, let selected = model.webQuotaSelection, webUsage.hasSelectedTarget {
             Task { [weak self] in
                 guard let self else { return }
-                for _ in 0..<30 where model.replies.isConnecting { try? await Task.sleep(for:.milliseconds(100)) }
+                for _ in 0..<30 where model.capturing || model.replies.isConnecting { try? await Task.sleep(for:.milliseconds(100)) }
                 try? await self.webUsage.read(explicit:false)
                 guard self.panelActivation == activation,
                       [selected.app.processIdentifier,getpid()].contains(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1) else { return }

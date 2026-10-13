@@ -312,14 +312,25 @@ final class TranslatorModel: ObservableObject {
     }
     func stopPermissionMonitoring() { permissionMonitor.stop() }
 
+    /// True while ⌃⌥E waits for the target app to expose the focused input.
+    @Published private(set) var capturing = false
+    private var captureRequest: UUID?
     func prepareTarget() {
         guard !busy else { return }
         refreshPermission()
         if CompanionPreferences.simulated { report("本机模拟不连接真实 Claude。"); return }
-        do {
-            connectCapturedTarget(try TargetBridge.capture())
-        } catch {
-            handleCaptureFailure(error, bundle: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        // Read the app now: the companion's own panel becomes frontmost right after this.
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        let request = UUID(); captureRequest = request; capturing = true
+        Task { [weak self] in
+            let result: Result<TargetBridge.Target, Error>
+            do { result = .success(try await TargetBridge.capture(from: frontmost)) } catch { result = .failure(error) }
+            guard let self, captureRequest == request else { return }
+            captureRequest = nil; capturing = false
+            switch result {
+            case let .success(captured): connectCapturedTarget(captured)
+            case let .failure(error): handleCaptureFailure(error, bundle: frontmost?.bundleIdentifier)
+            }
         }
     }
     func handleCaptureFailure(_ error: Error, bundle: String?) {
