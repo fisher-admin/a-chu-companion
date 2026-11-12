@@ -96,7 +96,7 @@ struct MainView: View {
                                 }
                             }.padding(.vertical, 30).frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        ForEach(model.history) { item in
+                        ForEach(model.displayedHistory) { item in
                             ChatBubble(item: item, fontSize: model.replyTextSize.points) { model.copyTranslation(id: item.id) }.id(item.id)
                         }
                         Color.clear.frame(height: 1).id("bottom")

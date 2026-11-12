@@ -56,6 +56,33 @@ import AppKit
         model.recordReplyOriginal(id: "a", foreign: "first revised", language: .english)
         precondition(model.history.map(\.id) == ["a", "b"] && model.history[0].chinese == "第一条" && model.chatRevision == scroll)
         print("PASS: revisions retain Chinese and record order without forcing scroll")
-        print("6 optimization contracts passed")
+        try await checkHistoryDisplayOrder()
+        print("7 optimization contracts passed")
+    }
+
+    @MainActor static func checkHistoryDisplayOrder() async throws {
+        let model = TranslatorModel(permissionCheck: { false })
+        defer { model.replies.stop(); model.stopPermissionMonitoring() }
+        model.replies.testTranslation = { _ in "模拟译文" }
+        let conversation = "synthetic history order"
+        let old = ReplyWork(candidate: .init(ordinal: 2, text: "Older reply."), conversation: conversation, manual: true)
+        let other = ReplyIdentity.id(conversation: "separate conversation", ordinal: 99)
+        let latest = ReplyIdentity.id(conversation: conversation, ordinal: 12, segment: 10)
+        let earlierSegment = ReplyIdentity.id(conversation: conversation, ordinal: 12, segment: 2)
+        model.recordReply(id: other, foreign: "Separate reply.", chinese: "另一会话", language: .english)
+        model.history.append(.init(id: "draft", isUser: true, chinese: "草稿", foreign: "Draft."))
+        model.recordReply(id: latest, foreign: "Later segment.", chinese: "后段", language: .english)
+        model.recordReply(id: earlierSegment, foreign: "Earlier segment.", chinese: "前段", language: .english)
+        model.replies.historyChoices = [old]
+        model.replies.selectHistoryReply(old)
+        let expected = [other, "draft", old.id, earlierSegment, latest]
+        precondition(model.displayedHistory.map(\.id) == expected, "Late replies must appear in original message and segment order")
+        precondition(model.history.last?.id == old.id, "History retention must still use acquisition order")
+        precondition(model.chatScrollTarget == old.id, "An explicit history selection should still scroll to the selected reply")
+        for _ in 0..<100 where model.history.last?.chinese.isEmpty == true {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        precondition(model.history.last?.chinese == "模拟译文" && model.displayedHistory.map(\.id) == expected)
+        print("PASS: a late historical reply and out-of-order segments display in conversation order")
     }
 }
