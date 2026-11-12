@@ -5,6 +5,20 @@ enum ReplyIdentity {
     static func id(conversation: String, ordinal: Int, segment: Int = 0) -> String {
         SHA256.hash(data: Data(conversation.utf8)).map { String(format: "%02x", $0) }.joined() + ":" + String(ordinal) + (segment > 0 ? ":part:" + String(segment) : "")
     }
+
+    struct Position {
+        let conversation: String
+        let address: ReplyAddress
+    }
+
+    static func position(of id: String) -> Position? {
+        let fields = id.split(separator: ":", omittingEmptySubsequences: false)
+        guard fields.count == 2 || (fields.count == 4 && fields[2] == "part"), !fields[0].isEmpty,
+              let ordinal = Int(fields[1]), ordinal >= 0 else { return nil }
+        let segment = fields.count == 4 ? Int(fields[3]) : 0
+        guard let segment, segment >= 0 else { return nil }
+        return Position(conversation: String(fields[0]), address: ReplyAddress(ordinal: ordinal, segment: segment))
+    }
 }
 
 struct ConversationReplyTracker {

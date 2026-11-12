@@ -66,6 +66,22 @@ final class TranslatorModel: ObservableObject {
         var updating = false
     }
     @Published var history: [ChatItem] = []
+    var displayedHistory: [ChatItem] {
+        // Keep acquisition order for retention, so an explicit history read stays available.
+        var ordered: [(item: ChatItem, position: ReplyIdentity.Position?)] = []
+        for item in history {
+            let position = item.isUser ? nil : ReplyIdentity.position(of: item.id)
+            if let position, let index = ordered.firstIndex(where: { row in
+                guard let existing = row.position, existing.conversation == position.conversation else { return false }
+                return existing.address > position.address
+            }) {
+                ordered.insert((item, position), at: index)
+            } else {
+                ordered.append((item, position))
+            }
+        }
+        return ordered.map(\.item)
+    }
     @Published var replyTextSize = ReplyTextSize(rawValue: CompanionPreferences.store.integer(forKey: "replyTextSize")) ?? .medium {
         didSet { CompanionPreferences.store.set(replyTextSize.rawValue, forKey: "replyTextSize") }
     }
